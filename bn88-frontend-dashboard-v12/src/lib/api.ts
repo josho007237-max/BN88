@@ -141,6 +141,44 @@ export type ChatMessage = {
   updatedAt?: string;
 };
 
+/* ---- Knowledge types ---- */
+
+export type KnowledgeDoc = {
+  id: string;
+  tenant: string;
+  title: string;
+  tags?: string | null;
+  body: string;
+  status: string;
+  createdAt?: string;
+  updatedAt?: string;
+  _count?: { chunks: number; bots: number };
+};
+
+export type KnowledgeDocDetail = KnowledgeDoc & {
+  bots?: { botId: string; docId: string; bot?: BotItem }[];
+};
+
+export type KnowledgeChunk = {
+  id: string;
+  tenant: string;
+  docId: string;
+  content: string;
+  embedding?: unknown;
+  tokens: number;
+  createdAt: string;
+  updatedAt?: string;
+};
+
+export type KnowledgeListResponse = {
+  ok: boolean;
+  items: KnowledgeDoc[];
+  page: number;
+  limit: number;
+  total: number;
+  pages: number;
+};
+
 
 /* ================================ Base ================================ */
 
@@ -463,13 +501,15 @@ export async function updateBotConfig(
  */
 export async function getChatSessions(
   botId: string,
-  limit = 50
+  limit = 50,
+  platform?: string
 ): Promise<ChatSession[]> {
   const res = await API.get<{ ok: boolean; items: ChatSession[] }>(
     "/admin/chat/sessions",
-    { params: { botId, limit } }
+    { params: { botId, limit, platform } }
   );
-  return res.data.items ?? [];
+  const data = res.data as any;
+  return data.items ?? data.sessions ?? [];
 }
 
 /**
@@ -483,7 +523,8 @@ export async function getChatMessages(
     `/admin/chat/sessions/${encodeURIComponent(sessionId)}/messages`,
     { params: { limit } }
   );
-  return res.data.items ?? [];
+  const data = res.data as any;
+  return data.items ?? data.messages ?? [];
 }
 
 // ตำแหน่งเดิมที่คุณเขียน replyChatSession เอาออกไปเลย แล้วแทนด้วยโค้ดนี้
@@ -504,6 +545,121 @@ export async function replyChatSession(
   );
 
   return res.data;
+}
+
+/* ============================== Knowledge APIs ============================== */
+
+export async function listKnowledgeDocs(params?: {
+  q?: string;
+  status?: string;
+  page?: number;
+  limit?: number;
+}): Promise<KnowledgeListResponse> {
+  const res = await API.get<KnowledgeListResponse>("/admin/ai/knowledge/docs", {
+    params,
+  });
+  return res.data;
+}
+
+export async function getKnowledgeDoc(id: string): Promise<{ ok: boolean; item: KnowledgeDocDetail }> {
+  const res = await API.get<{ ok: boolean; item: KnowledgeDocDetail }>(
+    `/admin/ai/knowledge/docs/${encodeURIComponent(id)}`
+  );
+  return res.data;
+}
+
+export async function createKnowledgeDoc(payload: {
+  title: string;
+  tags?: string;
+  body?: string;
+  status?: string;
+}): Promise<{ ok: boolean; item: KnowledgeDoc }> {
+  const res = await API.post<{ ok: boolean; item: KnowledgeDoc }>(
+    "/admin/ai/knowledge/docs",
+    payload
+  );
+  return res.data;
+}
+
+export async function updateKnowledgeDoc(
+  id: string,
+  payload: Partial<{ title: string; tags?: string; body?: string; status?: string }>
+): Promise<{ ok: boolean; item: KnowledgeDoc }> {
+  const res = await API.patch<{ ok: boolean; item: KnowledgeDoc }>(
+    `/admin/ai/knowledge/docs/${encodeURIComponent(id)}`,
+    payload
+  );
+  return res.data;
+}
+
+export async function deleteKnowledgeDoc(id: string) {
+  await API.delete(`/admin/ai/knowledge/docs/${encodeURIComponent(id)}`);
+  return { ok: true as const };
+}
+
+export async function listKnowledgeChunks(docId: string): Promise<{ ok: boolean; items: KnowledgeChunk[] }> {
+  const res = await API.get<{ ok: boolean; items: KnowledgeChunk[] }>(
+    `/admin/ai/knowledge/docs/${encodeURIComponent(docId)}/chunks`
+  );
+  return res.data;
+}
+
+export async function createKnowledgeChunk(
+  docId: string,
+  payload: { content: string; tokens?: number }
+): Promise<{ ok: boolean; item: KnowledgeChunk }> {
+  const res = await API.post<{ ok: boolean; item: KnowledgeChunk }>(
+    `/admin/ai/knowledge/docs/${encodeURIComponent(docId)}/chunks`,
+    payload
+  );
+  return res.data;
+}
+
+export async function updateKnowledgeChunk(
+  chunkId: string,
+  payload: Partial<{ content: string; tokens?: number; embedding?: unknown }>
+): Promise<{ ok: boolean; item: KnowledgeChunk }> {
+  const res = await API.patch<{ ok: boolean; item: KnowledgeChunk }>(
+    `/admin/ai/knowledge/chunks/${encodeURIComponent(chunkId)}`,
+    payload
+  );
+  return res.data;
+}
+
+export async function deleteKnowledgeChunk(chunkId: string) {
+  await API.delete(`/admin/ai/knowledge/chunks/${encodeURIComponent(chunkId)}`);
+  return { ok: true as const };
+}
+
+export async function getBotKnowledge(botId: string): Promise<{
+  ok: boolean;
+  botId: string;
+  items: KnowledgeDoc[];
+  docIds: string[];
+}> {
+  const res = await API.get<{
+    ok: boolean;
+    botId: string;
+    items: KnowledgeDoc[];
+    docIds: string[];
+  }>(`/admin/ai/knowledge/bots/${encodeURIComponent(botId)}/knowledge`);
+  return res.data;
+}
+
+export async function addBotKnowledge(botId: string, docId: string) {
+  await API.post(`/admin/ai/knowledge/bots/${encodeURIComponent(botId)}/knowledge`, {
+    docId,
+  });
+  return { ok: true as const };
+}
+
+export async function removeBotKnowledge(botId: string, docId: string) {
+  await API.delete(
+    `/admin/ai/knowledge/bots/${encodeURIComponent(botId)}/knowledge/${encodeURIComponent(
+      docId
+    )}`
+  );
+  return { ok: true as const };
 }
 
 
