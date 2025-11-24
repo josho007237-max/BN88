@@ -4,7 +4,7 @@ export async function sendTelegramMessage(
   botToken: string,
   chatId: number | string,
   text: string,
-  replyToMessageId?: string
+  replyToMessageId?: string | number
 ): Promise<boolean> {
   const f = (globalThis as any).fetch as typeof fetch | undefined;
   if (!f) {
