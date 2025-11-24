@@ -6,6 +6,7 @@ import {
   useCallback,
 } from "react";
 import { Link, useParams, useNavigate } from "react-router-dom";
+import toast from "react-hot-toast";
 import BotIntentsPanel from "../components/BotIntentsPanel";
 import {
   getApiBase,
@@ -215,12 +216,13 @@ export default function BotDetail() {
         if (val) (payload as any)[k] = val;
       });
 
-      await updateBotSecrets(botId, payload);
-      alert("บันทึกแล้ว ✔");
+      const res = await updateBotSecrets(botId, payload);
+      if (!res?.ok) throw new Error("save_failed");
+      toast.success("บันทึก Secrets แล้ว");
       await loadBot(); // รีเฟรชค่า (รวม verifiedAt หากครบ)
     } catch (err) {
       console.error("onSave secrets error:", err);
-      alert("บันทึกไม่สำเร็จ ❌");
+      toast.error((err as any)?.message || "บันทึกไม่สำเร็จ ❌");
     } finally {
       setSaving(false);
     }
@@ -376,6 +378,7 @@ export default function BotDetail() {
         <div className="grid gap-4 md:grid-cols-2">
           <Field label="OpenAI API Key">
             <input
+              type="password"
               className="w-full px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 outline-none focus:ring-2 focus:ring-white/10 text-sm"
               placeholder="sk-… หรือใส่ ****** เพื่อคงค่าเดิม"
               value={form.openaiApiKey}
@@ -397,6 +400,7 @@ export default function BotDetail() {
             </Field>
             <Field label={secretLabel}>
               <input
+                type="password"
                 className="w-full px-3 py-2 rounded-lg bg-neutral-800 border border-neutral-700 outline-none focus:ring-2 focus:ring-white/10 text-sm"
                 placeholder="ใส่ค่าใหม่ หรือ ****** เพื่อคงค่าเดิม"
                 value={form.lineChannelSecret}

@@ -28,6 +28,7 @@ export type BotGetResponse = { ok: boolean; bot: BotItem };
 
 export type BotSecretsPayload = {
   openaiApiKey?: string | null;
+  openAiApiKey?: string | null; // casing alias
   lineAccessToken?: string | null;
   lineChannelSecret?: string | null;
 
@@ -37,9 +38,20 @@ export type BotSecretsPayload = {
 };
 
 export type BotSecretsMasked = {
+  ok?: boolean;
   openaiApiKey?: string; // "********" ถ้ามีค่า
   lineAccessToken?: string; // "********" ถ้ามีค่า
   lineChannelSecret?: string; // "********" ถ้ามีค่า
+};
+
+export type BotSecretsSaveResponse = {
+  ok: boolean;
+  botId: string;
+  saved: {
+    openaiApiKey: boolean;
+    lineAccessToken: boolean;
+    lineChannelSecret: boolean;
+  };
 };
 
 export type CaseItem = {
@@ -339,7 +351,11 @@ export async function updateBotSecrets(
 ) {
   const norm: BotSecretsPayload = {
     ...payload,
-    openaiApiKey: payload.openaiApiKey ?? payload.openaiKey ?? undefined,
+    openaiApiKey:
+      payload.openaiApiKey ??
+      payload.openAiApiKey ??
+      payload.openaiKey ??
+      undefined,
     lineChannelSecret:
       payload.lineChannelSecret ?? payload.lineSecret ?? undefined,
   };
@@ -356,7 +372,7 @@ export async function updateBotSecrets(
     body.lineChannelSecret = norm.lineChannelSecret.trim();
 
   return (
-    await API.post<{ ok: true; botId: string }>(
+    await API.post<BotSecretsSaveResponse>(
       `/admin/bots/${encodeURIComponent(botId)}/secrets`,
       body
     )
