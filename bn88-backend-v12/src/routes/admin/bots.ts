@@ -213,6 +213,18 @@ router.post("/init", async (_req: Request, res: Response) => {
 /*                                   Secrets                                  */
 /* -------------------------------------------------------------------------- */
 
+const secretsSchema = z
+  .object({
+    openaiApiKey: z.string().min(1).max(200).trim().optional(),
+    lineAccessToken: z.string().min(1).max(500).trim().optional(),
+    lineChannelSecret: z.string().min(1).max(200).trim().optional(),
+
+    // backwards-compatible aliases
+    openaiKey: z.string().min(1).max(200).trim().optional(),
+    lineSecret: z.string().min(1).max(200).trim().optional(),
+  })
+  .partial();
+
 // GET /api/admin/bots/:id/secrets
 router.get("/:id/secrets", findBot, async (req: Request, res: Response) => {
   try {
@@ -234,16 +246,23 @@ router.get("/:id/secrets", findBot, async (req: Request, res: Response) => {
 // POST /api/admin/bots/:id/secrets
 router.post("/:id/secrets", findBot, async (req: Request, res: Response) => {
   try {
-    const { openaiApiKey, lineAccessToken, lineChannelSecret } = req.body as {
-      openaiApiKey?: string | null;
-      lineAccessToken?: string | null;
-      lineChannelSecret?: string | null;
-    };
+    const parsed = secretsSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        ok: false,
+        message: "invalid_input",
+        issues: parsed.error.issues,
+      });
+    }
 
-    const sanitize = (s?: string | null) =>
-      typeof s === "string" && s.trim() && s.trim() !== "******"
-        ? s.trim()
-        : undefined;
+    const payload = parsed.data;
+    const botId = req.params.id;
+
+    const norm = {
+      openaiApiKey: payload.openaiApiKey ?? payload.openaiKey,
+      lineAccessToken: payload.lineAccessToken,
+      lineChannelSecret: payload.lineChannelSecret ?? payload.lineSecret,
+    };
 
     const update: {
       openaiApiKey?: string | null;
@@ -251,15 +270,9 @@ router.post("/:id/secrets", findBot, async (req: Request, res: Response) => {
       channelSecret?: string | null;
     } = {};
 
-    const oa = sanitize(openaiApiKey);
-    const lat = sanitize(lineAccessToken);
-    const lcs = sanitize(lineChannelSecret);
-
-    if (oa !== undefined) update.openaiApiKey = oa;
-    if (lat !== undefined) update.channelAccessToken = lat;
-    if (lcs !== undefined) update.channelSecret = lcs;
-
-    const botId = req.params.id;
+    if (norm.openaiApiKey) update.openaiApiKey = norm.openaiApiKey;
+    if (norm.lineAccessToken) update.channelAccessToken = norm.lineAccessToken;
+    if (norm.lineChannelSecret) update.channelSecret = norm.lineChannelSecret;
 
     const secretRow = await prisma.botSecret.upsert({
       where: { botId },
@@ -295,7 +308,15 @@ router.post("/:id/secrets", findBot, async (req: Request, res: Response) => {
       });
     }
 
-    return res.json({ ok: true, botId });
+    return res.json({
+      ok: true,
+      botId,
+      saved: {
+        openaiApiKey: Boolean(secretRow.openaiApiKey),
+        lineAccessToken: Boolean(secretRow.channelAccessToken),
+        lineChannelSecret: Boolean(secretRow.channelSecret),
+      },
+    });
   } catch (err) {
     console.error("POST /admin/bots/:id/secrets error:", err);
     return res.status(500).json({ ok: false, message: "internal_error" });
