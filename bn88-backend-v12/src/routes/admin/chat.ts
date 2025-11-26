@@ -82,7 +82,7 @@ router.get("/sessions", async (req: Request, res: Response) => {
       take: limit,
     });
 
-    return res.json({ ok: true, sessions });
+    return res.json({ ok: true, sessions, items: sessions });
   } catch (err) {
     console.error("[admin chat] list sessions error", err);
     return res
@@ -119,7 +119,7 @@ router.get(
         take: limit,
       });
 
-      return res.json({ ok: true, session, messages });
+      return res.json({ ok: true, session, messages, items: messages });
     } catch (err) {
       console.error("[admin chat] list messages error", err);
       return res
