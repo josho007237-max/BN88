@@ -21,6 +21,7 @@ import { config } from "./config";
 import { logger } from "./mw/logger";
 import { authGuard } from "./mw/auth";
 import { sseHandler } from "./live";
+import { events } from "./routes/events";
 
 /* Core routes */
 import health from "./routes/health";
@@ -126,6 +127,7 @@ const limiter = rateLimit({
     req.path.startsWith("/webhooks/") ||
     req.path === "/health" ||
     req.path.startsWith("/live/") ||
+    req.path.startsWith("/events") ||
     req.path.startsWith("/admin/chat"),
 });
 
@@ -147,6 +149,7 @@ app.get("/api/health", (_req, res) =>
 
 app.use("/api", devRoutes);
 app.use("/api", lineTools);
+app.use("/api", events);
 
 /* Core */
 

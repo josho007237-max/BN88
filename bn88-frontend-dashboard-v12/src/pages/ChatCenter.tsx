@@ -1,5 +1,11 @@
 // src/pages/ChatCenter.tsx
-import React, { useEffect, useRef, useState, useMemo } from "react";
+import React, {
+  useEffect,
+  useRef,
+  useState,
+  useMemo,
+  useCallback,
+} from "react";
 import {
   type BotItem,
   type ChatSession,
@@ -8,6 +14,7 @@ import {
   getChatSessions,
   getChatMessages,
   replyChatSession,
+  getApiBase,
 } from "../lib/api";
 
 const POLL_INTERVAL_MS = 3000; // 3 วินาที
@@ -88,6 +95,9 @@ const ChatCenter: React.FC = () => {
   const [replyText, setReplyText] = useState("");
   const [error, setError] = useState<string | null>(null);
 
+  const tenant = import.meta.env.VITE_TENANT || "bn9";
+  const apiBase = getApiBase();
+
   // ช่องค้นหา sessions
   const [sessionQuery, setSessionQuery] = useState("");
 
@@ -96,6 +106,57 @@ const ChatCenter: React.FC = () => {
     useState<PlatformFilterValue>("all");
 
   const messagesRef = useRef<HTMLDivElement | null>(null);
+
+  const fetchSessions = useCallback(
+    async (botId: string, preferSessionId?: string | null) => {
+      try {
+        setLoadingSessions(true);
+        setError(null);
+        const data = await getChatSessions(botId, 50);
+        setSessions(data);
+
+        const preferId = preferSessionId || selectedSession?.id || null;
+        const nextSession = preferId
+          ? data.find((s) => s.id === preferId) ?? data[0] ?? null
+          : data[0] ?? null;
+
+        setSelectedSession((prev) => {
+          if (prev?.id && nextSession?.id && prev.id === nextSession.id) {
+            return prev; // ลดการ rerender/fetch ซ้ำ
+          }
+          return nextSession ?? null;
+        });
+        if (!nextSession) setMessages([]);
+        return nextSession ?? null;
+      } catch (e) {
+        console.error(e);
+        setError("โหลดรายการห้องแชทไม่สำเร็จ");
+        setSessions([]);
+        setSelectedSession(null);
+        setMessages([]);
+        return null;
+      } finally {
+        setLoadingSessions(false);
+      }
+    },
+    [selectedSession?.id]
+  );
+
+  const fetchMessages = useCallback(async (sessionId: string) => {
+    try {
+      setLoadingMessages(true);
+      setError(null);
+      const data = await getChatMessages(sessionId, 200);
+      setMessages(data);
+      return data;
+    } catch (e) {
+      console.error(e);
+      setError("โหลดข้อความไม่สำเร็จ");
+      return [];
+    } finally {
+      setLoadingMessages(false);
+    }
+  }, []);
 
   /* ------------------------- โหลดรายชื่อบอททั้งหมด ------------------------- */
 
@@ -133,36 +194,11 @@ const ChatCenter: React.FC = () => {
         setMessages([]);
         return;
       }
-      try {
-        setLoadingSessions(true);
-        setError(null);
-        const data = await getChatSessions(selectedBotId, 50);
-        setSessions(data);
-
-        if (data.length > 0) {
-          // ถ้าเคยเลือกห้องอยู่แล้ว ให้พยายามคงห้องเดิม
-          if (selectedSession) {
-            const exist = data.find((s) => s.id === selectedSession.id);
-            setSelectedSession(exist ?? data[0]);
-          } else {
-            setSelectedSession(data[0]);
-          }
-        } else {
-          setSelectedSession(null);
-          setMessages([]);
-        }
-      } catch (e) {
-        console.error(e);
-        setError("โหลดรายการห้องแชทไม่สำเร็จ");
-      } finally {
-        setLoadingSessions(false);
-      }
+      await fetchSessions(selectedBotId);
     };
 
     void loadSessions();
-    // ไม่ใส่ selectedSession ใน deps เพื่อไม่ให้ loop
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedBotId]);
+  }, [selectedBotId, fetchSessions]);
 
   /* ------------------ โหลด messages เมื่อเปลี่ยน session ------------------ */
 
@@ -172,21 +208,11 @@ const ChatCenter: React.FC = () => {
         setMessages([]);
         return;
       }
-      try {
-        setLoadingMessages(true);
-        setError(null);
-        const data = await getChatMessages(selectedSession.id, 200);
-        setMessages(data);
-      } catch (e) {
-        console.error(e);
-        setError("โหลดข้อความไม่สำเร็จ");
-      } finally {
-        setLoadingMessages(false);
-      }
+      await fetchMessages(selectedSession.id);
     };
 
     void loadMessages();
-  }, [selectedSession?.id]);
+  }, [selectedSession?.id, fetchMessages]);
 
   /* -------- Auto-refresh ทั้ง sessions + messages แบบเป็นช่วงเวลา -------- */
 
@@ -195,25 +221,14 @@ const ChatCenter: React.FC = () => {
 
     const timer = window.setInterval(async () => {
       try {
-        // 1) refresh รายการห้องแชท
-        const sess = await getChatSessions(selectedBotId, 50);
-        setSessions(sess);
-
-        // พยายามคงห้องเดิมไว้ ถ้ายังมีอยู่
-        if (selectedSession) {
-          const exist = sess.find((s) => s.id === selectedSession.id);
-          if (!exist) {
-            // ถ้าห้องเดิมหายไป ให้เคลียร์ selection หรือเลือกห้องแรก
-            setSelectedSession(sess[0] ?? null);
-          }
-        }
-
-        // 2) ถ้ามีห้องที่เลือกอยู่ → refresh ข้อความ
         const currentSessionId = selectedSession?.id;
-        if (currentSessionId) {
-          const msgs = await getChatMessages(currentSessionId, 200);
-          setMessages(msgs);
-        }
+        const nextSession = await fetchSessions(
+          selectedBotId,
+          currentSessionId ?? undefined
+        );
+
+        const targetSessionId = currentSessionId || nextSession?.id;
+        if (targetSessionId) await fetchMessages(targetSessionId);
       } catch (e) {
         console.error("[ChatCenter poll error]", e);
         // ไม่ต้อง setError บ่อย ๆ เดี๋ยวจอกระพริบ
@@ -223,7 +238,49 @@ const ChatCenter: React.FC = () => {
     return () => {
       window.clearInterval(timer);
     };
-  }, [selectedBotId, selectedSession?.id]);
+  }, [selectedBotId, selectedSession?.id, fetchSessions, fetchMessages]);
+
+  /* ------------------- SSE: รับข้อความใหม่แบบ realtime ------------------- */
+
+  useEffect(() => {
+    if (!selectedBotId) return;
+
+    const url = `${apiBase}/events?tenant=${encodeURIComponent(tenant)}`;
+    const es = new EventSource(url);
+
+    const handleNewMessage = (ev: MessageEvent) => {
+      try {
+        const payload = JSON.parse(ev.data || "{}") as any;
+        if (!payload || payload.botId !== selectedBotId) return;
+        const sessionId = payload.sessionId as string | undefined;
+
+        void (async () => {
+          const nextSession = await fetchSessions(
+            selectedBotId,
+            sessionId || selectedSession?.id || undefined
+          );
+          const targetSessionId =
+            sessionId || selectedSession?.id || nextSession?.id || null;
+          if (targetSessionId) {
+            await fetchMessages(targetSessionId);
+          }
+        })();
+      } catch (err) {
+        console.warn("[ChatCenter SSE parse error]", err);
+      }
+    };
+
+    es.addEventListener("chat:message:new", handleNewMessage);
+
+    return () => {
+      es.removeEventListener("chat:message:new", handleNewMessage as any);
+      try {
+        es.close();
+      } catch (e) {
+        console.warn("[ChatCenter SSE close warn]", e);
+      }
+    };
+  }, [selectedBotId, tenant, apiBase, fetchSessions, fetchMessages, selectedSession?.id]);
 
   /* ---------------- scroll ลงล่างเมื่อมีข้อความใหม่ ---------------- */
 
@@ -555,6 +612,9 @@ const ChatCenter: React.FC = () => {
 
               const msgIntentCode = getMessageIntentCode(m);
               const msgIntentLabel = intentCodeToLabel(msgIntentCode);
+              const messagePlatform = platformLabel(
+                m.platform || selectedSession?.platform
+              );
 
               return (
                 <React.Fragment key={m.id}>
@@ -576,8 +636,15 @@ const ChatCenter: React.FC = () => {
                           หมวด: {msgIntentLabel}
                         </div>
                       )}
-                      <div className="mt-1 text-[10px] opacity-70 text-right">
-                        {new Date(m.createdAt).toLocaleTimeString()}
+                      <div className="mt-1 text-[10px] opacity-70 flex items-center justify-between gap-2">
+                        {messagePlatform && (
+                          <span className="px-2 py-0.5 rounded-full bg-black/20 border border-white/10">
+                            {messagePlatform}
+                          </span>
+                        )}
+                        <span className="ml-auto text-right">
+                          {new Date(m.createdAt).toLocaleTimeString()}
+                        </span>
                       </div>
                     </div>
                   </div>

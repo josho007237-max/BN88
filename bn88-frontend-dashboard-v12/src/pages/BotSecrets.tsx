@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useParams, Link } from "react-router-dom";
+import toast from "react-hot-toast";
 import { getBotSecrets, updateBotSecrets } from "../lib/api";
 import type { BotSecretsMasked, BotSecretsPayload } from "../types/api";
 
@@ -41,10 +42,13 @@ export default function BotSecretsPage() {
       if (payload.openaiKey && !payload.openaiApiKey) payload.openaiApiKey = payload.openaiKey;
       if (payload.lineSecret && !payload.lineChannelSecret) payload.lineChannelSecret = payload.lineSecret;
 
-      await updateBotSecrets(botId, payload);
+      const res = await updateBotSecrets(botId, payload);
+      if (!res?.ok) throw new Error("save_failed");
+      toast.success("บันทึก Secrets แล้ว");
       await load();
     } catch (e: any) {
       setErr(e?.message || "บันทึกไม่สำเร็จ");
+      toast.error(e?.message || "บันทึกไม่สำเร็จ");
     } finally {
       setSaving(false);
     }
