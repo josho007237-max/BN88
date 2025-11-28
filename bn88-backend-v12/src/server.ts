@@ -50,8 +50,19 @@ import devRoutes from "./routes/dev";
 import lineTools from "./routes/tools/line";
 import aiAnswerRoute from "./routes/ai/answer";
 
+/* LEP client (เชื่อมไป line-engagement-platform) */
+import { getLepHealth } from "./services/lepClient";
+
 const app = express();
 app.set("trust proxy", 1);
+
+/* root health (ไม่ขึ้นกับ /api) */
+app.get("/health", (req, res) => {
+  res.json({
+    ok: true,
+    service: "bn88-backend",
+  });
+});
 
 /* ---------- Body parsers ---------- */
 
@@ -144,6 +155,29 @@ app.get("/api/health", (_req, res) =>
     adminApi: true,
   })
 );
+
+/* ---------- LEP health ตรง ๆ ผ่าน backend ---------- */
+/* GET /api/admin/lep/health → proxy ไป http://localhost:8080/health */
+app.get("/api/admin/lep/health", async (_req: Request, res: Response) => {
+  try {
+    const result = await getLepHealth();
+
+    res.json({
+      ok: true,
+      target: "lep",
+      lepBaseUrl: result.lepBaseUrl,
+      status: result.status,
+      lepResponse: result.data,
+    });
+  } catch (err: any) {
+    console.error("[lep:health] error", err?.message ?? err);
+    res.status(500).json({
+      ok: false,
+      target: "lep",
+      error: err?.message ?? "LEP health check failed",
+    });
+  }
+});
 
 /* Dev & tools */
 

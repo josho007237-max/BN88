@@ -1,0 +1,10 @@
+# line-engagement-platform (LEP)
+line-engagement-platform/.env
+line-engagement-platform/node_modules
+line-engagement-platform/dist
+line-engagement-platform/docker-compose.override.yml.bak
+
+# ทั่วไป
+node_modules
+dist
+.env

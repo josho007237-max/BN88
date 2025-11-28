@@ -1,36 +1,35 @@
-version: "3.8"
-
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile
-    image: line-engagement-app:latest
+    image: line-engagement-app:latest   # สร้าง image ชื่อเดียวนี้
     env_file:
       - .env
     environment:
-      - NODE_ENV=production
+      NODE_ENV: production
     ports:
-      - "8080:8080"
+      - "8080:8080"                     # เปิด HTTP port ให้เรียก /health ได้
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
     networks:
       - backend
 
   worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    image: line-engagement-worker:latest
+    image: line-engagement-app:latest   # ใช้ image เดียวกับ app (ไม่ต้อง build ซ้ำ)
     env_file:
       - .env
     environment:
-      - NODE_ENV=production
-    command: ["node", "dist/workers/worker.js"]
+      NODE_ENV: production
+    command: ["node", "dist/workers/worker.js"]  # รัน worker จากไฟล์นี้
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
     networks:
       - backend
 

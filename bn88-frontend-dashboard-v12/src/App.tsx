@@ -39,7 +39,15 @@ export default function App() {
               Bots
             </Link>
 
-            {/* เมนูใหม่: Chat Center */}
+            {/* เมนูใหม่: LEP Monitor */}
+            <Link
+              to="/marketing-lep"
+              className="px-3 py-1.5 rounded-lg hover:bg-white/5"
+            >
+              LEP Monitor
+            </Link>
+
+            {/* เมนูเดิม: Chat Center */}
             <Link
               to="/chats"
               className="px-3 py-1.5 rounded-lg hover:bg-white/5"

@@ -1,7 +1,6 @@
 {
   "name": "line-engagement-platform",
   "version": "1.0.0",
-  "type": "module",
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/server.ts",
     "dev:worker": "ts-node-dev --respawn --transpile-only src/workers/worker.ts",
@@ -30,6 +29,9 @@
     "redis": "^4.6.5"
   },
   "devDependencies": {
+    "@types/basic-auth": "^1.1.8",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.5",
     "@types/node": "^22.10.1",
     "prisma": "^5.0.0",
     "ts-node": "^10.9.1",
