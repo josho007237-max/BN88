@@ -47,6 +47,95 @@ async function loadBotWithRelations(botId: string) {
   });
 }
 
+type KnowledgeChunkLite = {
+  id: string;
+  docId: string;
+  docTitle: string;
+  content: string;
+};
+
+async function getRelevantKnowledgeForBotMessage(params: {
+  botId: string;
+  tenant: string;
+  text: string;
+  limit?: number;
+}): Promise<KnowledgeChunkLite[]> {
+  const { botId, tenant, text, limit = 5 } = params;
+
+  // แยก keyword แบบง่าย ๆ จากข้อความลูกค้า (ไม่ต้องพึ่ง vector DB)
+  const keywords = text
+    .split(/\s+/)
+    .map((w) => w.toLowerCase().replace(/[^\p{L}\p{N}]/gu, ""))
+    .filter((w) => w.length >= 3)
+    .slice(0, 5);
+
+  const whereClause: any = {
+    doc: {
+      tenant,
+      status: "active",
+      bots: { some: { botId } },
+    },
+  };
+
+  if (keywords.length > 0) {
+    whereClause.OR = keywords.map((kw) => ({ content: { contains: kw } }));
+  }
+
+  const chunks = await prisma.knowledgeChunk.findMany({
+    where: whereClause,
+    include: {
+      doc: {
+        select: {
+          id: true,
+          title: true,
+        },
+      },
+    },
+    orderBy: [
+      { updatedAt: "desc" },
+      { createdAt: "desc" },
+    ],
+    take: limit,
+  });
+
+  return chunks.map((chunk) => ({
+    id: chunk.id,
+    docId: chunk.doc.id,
+    docTitle: chunk.doc.title,
+    content: chunk.content,
+  }));
+}
+
+function buildKnowledgeSummary(chunks: KnowledgeChunkLite[]): {
+  summary: string;
+  docIds: string[];
+  chunkIds: string[];
+} {
+  if (chunks.length === 0) {
+    return { summary: "", docIds: [], chunkIds: [] };
+  }
+
+  const lines: string[] = [];
+  let totalLength = 0;
+  const maxTotalLength = 1800;
+  const maxChunkLength = 360;
+
+  for (const chunk of chunks) {
+    if (totalLength >= maxTotalLength) break;
+
+    const content = chunk.content.slice(0, maxChunkLength);
+    const line = `- [doc: ${chunk.docTitle}] ${content}`;
+    totalLength += line.length;
+    lines.push(line);
+  }
+
+  return {
+    summary: lines.join("\n"),
+    docIds: Array.from(new Set(chunks.map((c) => c.docId))),
+    chunkIds: chunks.map((c) => c.id),
+  };
+}
+
 function todayKey(): string {
   // YYYY-MM-DD (ใช้เป็น key ของ StatDaily)
   return new Date().toISOString().slice(0, 10);
@@ -202,6 +291,24 @@ export async function processIncomingMessage(
       return fallback;
     }
 
+    // 4.1) ดึง knowledge ที่เกี่ยวข้องกับข้อความนี้ (ถ้ามี)
+    const knowledgeChunks = await getRelevantKnowledgeForBotMessage({
+      botId: bot.id,
+      tenant: bot.tenant,
+      text,
+    });
+
+    const { summary: knowledgeSummary, docIds: knowledgeDocIds, chunkIds } =
+      buildKnowledgeSummary(knowledgeChunks);
+
+    if (knowledgeChunks.length > 0) {
+      console.log("[processIncomingMessage] knowledge", {
+        botId: bot.id,
+        docs: knowledgeDocIds,
+        chunks: chunkIds.slice(0, 10),
+      });
+    }
+
     // 5) เตรียม intents สำหรับส่งเข้า prompt
     const intentsForPrompt =
       bot.intents && bot.intents.length > 0
@@ -256,8 +363,16 @@ ${intentsForPrompt}
       max_tokens: bot.config.maxTokens ?? 800,
       messages: [
         { role: "system", content: systemPrompt },
+        knowledgeSummary
+          ? {
+              role: "system",
+              content:
+                "นี่คือข้อมูลภายใน (Knowledge Base) ที่ต้องใช้ตอบลูกค้า ถ้าคำถามเกี่ยวข้องให้ยึดข้อมูลนี้เป็นหลัก:\n" +
+                knowledgeSummary,
+            }
+          : null,
         { role: "user", content: text },
-      ],
+      ].filter(Boolean) as any,
     });
 
     let rawContent: any = completion.choices[0]?.message?.content ?? "{}";
@@ -437,6 +552,9 @@ ${intentsForPrompt}
               intent,
               isIssue,
               caseId,
+              usedKnowledge: knowledgeChunks.length > 0,
+              knowledgeDocIds,
+              knowledgeChunkIds: chunkIds,
             },
           },
           select: {

@@ -6,6 +6,7 @@ import {
   processIncomingMessage,
   type SupportedPlatform,
 } from "../../services/inbound/processIncomingMessage";
+import { sendTelegramMessage } from "../../services/telegram";
 
 const router = Router();
 
@@ -75,54 +76,6 @@ async function resolveBot(tenant: string, botIdParam?: string) {
   };
 }
 
-export async function sendTelegramMessage(
-  botToken: string,
-  chatId: number | string,
-  text: string,
-  replyToMessageId?: number
-): Promise<boolean> {
-  const f = (globalThis as any).fetch as typeof fetch | undefined;
-  if (!f) {
-    console.error("[Telegram] global fetch is not available");
-    return false;
-  }
-
-  const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
-
-  const body: any = { chat_id: chatId, text };
-  if (replyToMessageId) body.reply_to_message_id = replyToMessageId;
-
-  try {
-    const resp = await f(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    const raw = await resp.text().catch(() => "");
-
-    if (!resp.ok) {
-      console.warn("[Telegram] sendMessage failed", {
-        status: resp.status,
-        statusText: resp.statusText,
-        body: raw,
-      });
-      return false;
-    }
-
-    console.log("[Telegram] sendMessage ok", {
-      chatId,
-      replyToMessageId,
-      raw,
-    });
-
-    return true;
-  } catch (err: any) {
-    console.error("[Telegram] sendMessage error", err?.message ?? err);
-    return false;
-  }
-}
-
 router.post("/", async (req: Request, res: Response) => {
   try {
     const tenant =
@@ -171,8 +124,11 @@ router.post("/", async (req: Request, res: Response) => {
       rawPayload: update,
     });
 
+    const hasReply = !!reply?.trim();
+    const hasBotToken = !!botToken;
+
     let replied = false;
-    if (reply && botToken) {
+    if (hasReply && hasBotToken) {
       replied = await sendTelegramMessage(
         botToken,
         chat.id,
@@ -181,8 +137,8 @@ router.post("/", async (req: Request, res: Response) => {
       );
     } else {
       console.warn("[TELEGRAM] skip send (no reply or no botToken)", {
-        hasReply: !!reply,
-        hasBotToken: !!botToken,
+        hasReply,
+        hasBotToken,
       });
     }
 
@@ -190,6 +146,9 @@ router.post("/", async (req: Request, res: Response) => {
       botId,
       tenant: botTenant,
       userId,
+      platformMessageId,
+      hasReply,
+      hasBotToken,
       intent,
       isIssue,
       replied,

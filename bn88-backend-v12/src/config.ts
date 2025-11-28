@@ -27,6 +27,9 @@ const EnvSchema = z.object({
   TENANT_DEFAULT: z.string().default("bn9"),
   LINE_CHANNEL_SECRET: z.string().optional(),
   LINE_DEV_SKIP_VERIFY: z.enum(["1", "0"]).default("1"), // dev = ข้ามตรวจลายเซ็นได้
+
+  // LINE Engagement Platform (LEP)
+  LEP_BASE_URL: z.string().default("http://localhost:8080"),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
@@ -63,6 +66,8 @@ export const config = {
   TENANT_DEFAULT: env.TENANT_DEFAULT,
   LINE_CHANNEL_SECRET: env.LINE_CHANNEL_SECRET,
   LINE_DEV_SKIP_VERIFY: env.LINE_DEV_SKIP_VERIFY,
+
+  LEP_BASE_URL: env.LEP_BASE_URL,
 
   isProd: env.NODE_ENV === "production",
   isDev: env.NODE_ENV === "development",

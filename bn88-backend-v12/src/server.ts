@@ -21,6 +21,7 @@ import { config } from "./config";
 import { logger } from "./mw/logger";
 import { authGuard } from "./mw/auth";
 import { sseHandler } from "./live";
+import { events } from "./routes/events";
 
 /* Core routes */
 import health from "./routes/health";
@@ -43,6 +44,7 @@ import presetsAdmin from "./routes/admin/ai/presets";
 import knowledgeAdmin from "./routes/admin/ai/knowledge";
 import adminPersonaRoutes from "./routes/admin/personas";
 import { chatAdminRouter } from "./routes/admin/chat";
+import lepAdminRouter from "./routes/admin/lep";
 
 /* Dev & tools */
 import devRoutes from "./routes/dev";
@@ -126,6 +128,7 @@ const limiter = rateLimit({
     req.path.startsWith("/webhooks/") ||
     req.path === "/health" ||
     req.path.startsWith("/live/") ||
+    req.path.startsWith("/events") ||
     req.path.startsWith("/admin/chat"),
 });
 
@@ -147,6 +150,7 @@ app.get("/api/health", (_req, res) =>
 
 app.use("/api", devRoutes);
 app.use("/api", lineTools);
+app.use("/api", events);
 
 /* Core */
 
@@ -175,6 +179,7 @@ if (config.ENABLE_ADMIN_API === "1") {
   app.use("/api/admin/bots", authGuard, adminBotsRouter);
   app.use("/api/admin/bots", authGuard, adminBotIntentsRouter);
   app.use("/api/admin/chat", authGuard, chatAdminRouter);
+  app.use("/api/admin/lep", authGuard, lepAdminRouter);
 
   app.use("/api/admin", authGuard, adminRouter);
   app.use("/api/admin/ai/presets", authGuard, presetsAdmin);
