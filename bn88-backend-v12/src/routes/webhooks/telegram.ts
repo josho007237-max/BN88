@@ -7,6 +7,7 @@ import {
   type SupportedPlatform,
 } from "../../services/inbound/processIncomingMessage";
 import { sendTelegramMessage } from "../../services/telegram";
+import { MessageType } from "@prisma/client";
 
 const router = Router();
 
@@ -22,6 +23,10 @@ type TgMessage = {
   message_id: number;
   date: number;
   text?: string;
+  caption?: string;
+  photo?: Array<{ file_id: string; file_size?: number; width?: number; height?: number }>;
+  document?: { file_id: string; file_name?: string; mime_type?: string; file_size?: number };
+  sticker?: { file_id: string; set_name?: string; width?: number; height?: number };
   chat: TgChat;
   from?: TgUser;
 };
@@ -38,6 +43,64 @@ function isTextMessage(msg: any): msg is TgMessage & { text: string } {
     !!msg.chat &&
     (typeof msg.chat.id === "number" || typeof msg.chat.id === "string")
   );
+}
+
+function mapTelegramMessage(msg?: TgMessage) {
+  if (!msg || !msg.chat) return null;
+
+  if (msg.photo && msg.photo.length > 0) {
+    const best = msg.photo[msg.photo.length - 1];
+    return {
+      type: "IMAGE" as MessageType,
+      text: msg.text ?? msg.caption ?? "",
+      attachmentUrl: undefined,
+      attachmentMeta: {
+        fileId: best.file_id,
+        width: best.width,
+        height: best.height,
+        fileSize: best.file_size,
+      },
+    };
+  }
+
+  if (msg.document) {
+    return {
+      type: "FILE" as MessageType,
+      text: msg.text ?? msg.caption ?? msg.document.file_name ?? "",
+      attachmentUrl: undefined,
+      attachmentMeta: {
+        fileId: msg.document.file_id,
+        fileName: msg.document.file_name,
+        mimeType: msg.document.mime_type,
+        fileSize: msg.document.file_size,
+      },
+    };
+  }
+
+  if (msg.sticker) {
+    return {
+      type: "STICKER" as MessageType,
+      text: msg.text ?? "",
+      attachmentUrl: undefined,
+      attachmentMeta: {
+        fileId: msg.sticker.file_id,
+        setName: msg.sticker.set_name,
+        width: msg.sticker.width,
+        height: msg.sticker.height,
+      },
+    };
+  }
+
+  if (isTextMessage(msg)) {
+    return {
+      type: "TEXT" as MessageType,
+      text: msg.text ?? "",
+      attachmentUrl: undefined,
+      attachmentMeta: undefined,
+    };
+  }
+
+  return null;
 }
 
 async function resolveBot(tenant: string, botIdParam?: string) {
@@ -98,11 +161,19 @@ router.post("/", async (req: Request, res: Response) => {
     const { botId, tenant: botTenant, botToken } = picked;
     const update = req.body as TgUpdate;
 
-    if (!update || !isTextMessage(update.message)) {
-      console.log("[TELEGRAM] skip update (no text message)", update?.message);
+    if (!update || !update.message) {
+      console.log("[TELEGRAM] skip update (no message)", update?.message);
       return res
         .status(200)
-        .json({ ok: true, skipped: true, reason: "not_text_message" });
+        .json({ ok: true, skipped: true, reason: "no_message" });
+    }
+
+    const mapped = mapTelegramMessage(update.message);
+    if (!mapped) {
+      console.log("[TELEGRAM] skip update (unsupported message)", update.message);
+      return res
+        .status(200)
+        .json({ ok: true, skipped: true, reason: "unsupported_message" });
     }
 
     const msg = update.message;
@@ -110,7 +181,7 @@ router.post("/", async (req: Request, res: Response) => {
     const from = msg.from;
 
     const userId = String(from?.id ?? chat.id);
-    const text = msg.text ?? "";
+    const text = mapped.text ?? "";
     const platform: SupportedPlatform = "telegram";
     const platformMessageId = String(msg.message_id);
 
@@ -119,6 +190,9 @@ router.post("/", async (req: Request, res: Response) => {
       platform,
       userId,
       text,
+      messageType: mapped.type,
+      attachmentUrl: mapped.attachmentUrl,
+      attachmentMeta: mapped.attachmentMeta,
       displayName: from?.first_name || from?.username,
       platformMessageId,
       rawPayload: update,

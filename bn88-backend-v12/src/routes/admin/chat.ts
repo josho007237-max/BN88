@@ -4,9 +4,27 @@ import { prisma } from "../../lib/prisma";
 import { config } from "../../config";
 import { sseHub } from "../../lib/sseHub";
 import { sendTelegramMessage } from "../../services/telegram";
+import { MessageType } from "@prisma/client";
+import { z } from "zod";
 
 const router = Router();
 const TENANT_DEFAULT = process.env.TENANT_DEFAULT || "bn9";
+const MESSAGE_TYPES: MessageType[] = [
+  "TEXT",
+  "IMAGE",
+  "FILE",
+  "STICKER",
+  "SYSTEM",
+];
+
+const replyPayloadSchema = z.object({
+  type: z
+    .enum(MESSAGE_TYPES as [MessageType, MessageType, MessageType, MessageType, MessageType])
+    .optional(),
+  text: z.string().optional(),
+  attachmentUrl: z.string().url().optional(),
+  attachmentMeta: z.any().optional(),
+});
 
 /* ------------------------------------------------------------------ */
 /* Helpers                                                            */
@@ -55,6 +73,139 @@ async function sendLinePushMessage(
   }
 
   return true;
+}
+
+function buildLineMessage(
+  type: MessageType,
+  text: string,
+  attachmentUrl?: string | null,
+  attachmentMeta?: Record<string, unknown>
+) {
+  if (type === "IMAGE" && attachmentUrl) {
+    return {
+      type: "image",
+      originalContentUrl: attachmentUrl,
+      previewImageUrl: attachmentUrl,
+    } as any;
+  }
+
+  if (type === "STICKER" && attachmentMeta?.packageId && attachmentMeta?.stickerId) {
+    return {
+      type: "sticker",
+      packageId: String(attachmentMeta.packageId),
+      stickerId: String(attachmentMeta.stickerId),
+    } as any;
+  }
+
+  if (type === "FILE" && attachmentUrl) {
+    return {
+      type: "text",
+      text: `${text || "ไฟล์แนบ"}: ${attachmentUrl}`,
+    } as any;
+  }
+
+  return { type: "text", text: text || "" } as any;
+}
+
+async function sendLineRichMessage(
+  channelAccessToken: string,
+  toUserId: string,
+  type: MessageType,
+  text: string,
+  attachmentUrl?: string | null,
+  attachmentMeta?: Record<string, unknown>
+): Promise<boolean> {
+  const f = (globalThis as any).fetch as typeof fetch | undefined;
+  if (!f) {
+    console.error("[LINE push] global fetch is not available");
+    return false;
+  }
+
+  const message = buildLineMessage(type, text, attachmentUrl, attachmentMeta);
+  const resp = await f("https://api.line.me/v2/bot/message/push", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${channelAccessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      to: toUserId,
+      messages: [message],
+    }),
+  });
+
+  if (!resp.ok) {
+    const t = await resp.text().catch(() => "");
+    console.warn("[LINE push warning]", resp.status, t);
+    return false;
+  }
+
+  return true;
+}
+
+async function sendTelegramRich(
+  token: string,
+  chatId: string,
+  type: MessageType,
+  text: string,
+  attachmentUrl?: string | null,
+  attachmentMeta?: Record<string, unknown>,
+  replyToMessageId?: string | number
+): Promise<boolean> {
+  const f = (globalThis as any).fetch as typeof fetch | undefined;
+  if (!f) {
+    console.error("[Telegram] global fetch is not available");
+    return false;
+  }
+
+  try {
+    if (type === "IMAGE" && attachmentUrl) {
+      const resp = await f(`https://api.telegram.org/bot${token}/sendPhoto`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          photo: attachmentUrl,
+          caption: text || undefined,
+          reply_to_message_id: replyToMessageId,
+        }),
+      });
+      return resp.ok;
+    }
+
+    if (type === "FILE" && attachmentUrl) {
+      const resp = await f(`https://api.telegram.org/bot${token}/sendDocument`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          document: attachmentUrl,
+          caption: text || undefined,
+          reply_to_message_id: replyToMessageId,
+        }),
+      });
+      return resp.ok;
+    }
+
+    if (type === "STICKER" && attachmentMeta?.stickerId) {
+      const resp = await f(`https://api.telegram.org/bot${token}/sendSticker`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          sticker: String(attachmentMeta.stickerId),
+          reply_to_message_id: replyToMessageId,
+        }),
+      });
+      return resp.ok;
+    }
+
+    // default to text
+    return await sendTelegramMessage(token, chatId, text, replyToMessageId);
+  } catch (err) {
+    console.error("[Telegram] send rich error", err);
+    return false;
+  }
 }
 
 /* ------------------------------------------------------------------ */
@@ -139,15 +290,22 @@ router.post(
     try {
       const tenant = getTenant(req);
       const sessionId = String(req.params.id);
-      const { text } = req.body as { text?: string };
-
-      if (!text || typeof text !== "string" || !text.trim()) {
-        return res
-          .status(400)
-          .json({ ok: false, message: "text_required_for_reply" });
+      const parsed = replyPayloadSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ ok: false, message: "invalid_payload" });
       }
 
-      const messageText = text.trim();
+      const { text, attachmentUrl, attachmentMeta, type: rawType } = parsed.data;
+      const messageType: MessageType = rawType ?? "TEXT";
+      const messageText = (text ?? "").trim();
+
+      if (!messageText && !attachmentUrl) {
+        return res
+          .status(400)
+          .json({ ok: false, message: "text_or_attachment_required" });
+      }
+
+      const fallbackText = messageText || `[${messageType.toLowerCase()}]`;
 
       // หา session
       const session = await prisma.chatSession.findFirst({
@@ -186,10 +344,13 @@ router.post(
         } else {
           try {
             // สำหรับแชทส่วนตัว userId มักเท่ากับ chatId
-            delivered = await sendTelegramMessage(
+            delivered = await sendTelegramRich(
               token,
               session.userId,
-              messageText
+              messageType,
+              messageText,
+              attachmentUrl,
+              (attachmentMeta as any) ?? undefined
             );
           } catch (err) {
             console.error("[admin chat reply] telegram send error", err);
@@ -204,10 +365,13 @@ router.post(
           );
         } else {
           try {
-            delivered = await sendLinePushMessage(
+            delivered = await sendLineRichMessage(
               token,
               session.userId,
-              messageText
+              messageType,
+              fallbackText,
+              attachmentUrl,
+              (attachmentMeta as any) ?? undefined
             );
           } catch (err) {
             console.error("[admin chat reply] line push error", err);
@@ -231,8 +395,10 @@ router.post(
           platform: session.platform,
           sessionId: session.id,
           senderType: "admin",
-          messageType: "text",
-          text: messageText,
+          type: messageType,
+          text: messageText || null,
+          attachmentUrl: attachmentUrl ?? null,
+          attachmentMeta: attachmentMeta ?? null,
           meta: {
             via: "admin_reply",
             delivered,
@@ -241,6 +407,9 @@ router.post(
         select: {
           id: true,
           text: true,
+          type: true,
+          attachmentUrl: true,
+          attachmentMeta: true,
           createdAt: true,
         },
       });
@@ -250,7 +419,7 @@ router.post(
         where: { id: session.id },
         data: {
           lastMessageAt: now,
-          lastText: messageText,
+          lastText: messageText || fallbackText,
           lastDirection: "admin",
         },
       });
@@ -266,6 +435,9 @@ router.post(
             id: adminMsg.id,
             senderType: "admin",
             text: adminMsg.text,
+            type: adminMsg.type,
+            attachmentUrl: adminMsg.attachmentUrl,
+            attachmentMeta: adminMsg.attachmentMeta,
             createdAt: adminMsg.createdAt,
           },
         } as any);

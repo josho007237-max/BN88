@@ -132,6 +132,8 @@ export type ChatSession = {
 
 // src/lib/api.ts (ส่วนของ type สำหรับข้อความแชท)
 
+export type MessageType = "TEXT" | "IMAGE" | "FILE" | "STICKER" | "SYSTEM";
+
 export type ChatMessage = {
   id: string;
   sessionId: string;
@@ -143,8 +145,11 @@ export type ChatMessage = {
   // ✅ รองรับแอดมินด้วย
   senderType: "user" | "bot" | "admin";
 
-  messageType: string; // ส่วนใหญ่เป็น "text"
-  text: string;
+  type?: MessageType | string;
+  messageType?: string; // legacy field
+  text: string | null;
+  attachmentUrl?: string | null;
+  attachmentMeta?: unknown;
 
   platformMessageId?: string | null;
   meta?: unknown;
@@ -597,11 +602,16 @@ export type ReplyChatSessionResponse = {
 
 export async function replyChatSession(
   sessionId: string,
-  text: string
+  payload: {
+    text?: string;
+    type?: MessageType | string;
+    attachmentUrl?: string;
+    attachmentMeta?: unknown;
+  }
 ): Promise<ReplyChatSessionResponse> {
   const res = await API.post<ReplyChatSessionResponse>(
     `/admin/chat/sessions/${encodeURIComponent(sessionId)}/reply`,
-    { text }
+    payload
   );
 
   return res.data;

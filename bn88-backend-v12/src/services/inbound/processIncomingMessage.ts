@@ -3,6 +3,7 @@
 import { prisma } from "../../lib/prisma";
 import { getOpenAIClientForBot } from "../openai/getOpenAIClientForBot";
 import { sseHub } from "../../lib/sseHub";
+import { MessageType } from "@prisma/client";
 
 export type SupportedPlatform = "line" | "telegram" | "facebook";
 
@@ -11,6 +12,9 @@ export type ProcessIncomingParams = {
   platform: SupportedPlatform;
   userId: string;
   text: string;
+  messageType?: MessageType;
+  attachmentUrl?: string | null;
+  attachmentMeta?: unknown;
 
   // สำหรับ LINE/Telegram/Facebook ใช้กัน duplicate + log meta
   displayName?: string;
@@ -241,6 +245,9 @@ export async function processIncomingMessage(
       }
     }
 
+    const incomingType: MessageType = params.messageType ?? "TEXT";
+    const safeText = text?.trim() || (incomingType !== "TEXT" ? `[${incomingType.toLowerCase()}]` : "");
+
     // 3) บันทึกข้อความฝั่ง user → ChatMessage
     const userChatMessage = await prisma.chatMessage.create({
       data: {
@@ -249,8 +256,10 @@ export async function processIncomingMessage(
         platform,
         sessionId: session.id,
         senderType: "user",
-        messageType: "text",
-        text,
+        type: incomingType,
+        text: safeText || null,
+        attachmentUrl: params.attachmentUrl ?? null,
+        attachmentMeta: params.attachmentMeta ?? undefined,
         platformMessageId: platformMessageId ?? null,
         meta: {
           source: platform,
@@ -261,6 +270,9 @@ export async function processIncomingMessage(
         id: true,
         createdAt: true,
         text: true,
+        type: true,
+        attachmentUrl: true,
+        attachmentMeta: true,
       },
     });
 
@@ -274,9 +286,17 @@ export async function processIncomingMessage(
         id: userChatMessage.id,
         senderType: "user",
         text: userChatMessage.text,
+        type: userChatMessage.type,
+        attachmentUrl: userChatMessage.attachmentUrl,
+        attachmentMeta: userChatMessage.attachmentMeta,
         createdAt: userChatMessage.createdAt,
       },
     });
+
+    // ถ้าไม่ใช่ข้อความ text ให้หยุดที่นี่ (ไม่ต้องเรียก AI)
+    if (incomingType !== "TEXT") {
+      return { reply: "", intent: "non_text", isIssue: false };
+    }
 
     // 4) เตรียม client OpenAI ตาม secret/config ของบอท
     let openai;
@@ -544,7 +564,7 @@ ${intentsForPrompt}
             platform,
             sessionId: session.id,
             senderType: "bot",
-            messageType: "text",
+            type: "TEXT",
             text: reply,
             meta: {
               source: platform,
@@ -560,6 +580,7 @@ ${intentsForPrompt}
           select: {
             id: true,
             text: true,
+            type: true,
             createdAt: true,
           },
         });
@@ -573,6 +594,7 @@ ${intentsForPrompt}
             id: botChatMessage.id,
             senderType: "bot",
             text: botChatMessage.text,
+            type: botChatMessage.type,
             createdAt: botChatMessage.createdAt,
           },
         });

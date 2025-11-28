@@ -75,7 +75,7 @@ async function ingestInternal(
         platform: opts.platform,
         sessionId: session.id,
         senderType: opts.senderType,
-        messageType: "text",
+        type: "TEXT",
         text: opts.text,
         platformMessageId: opts.platformMessageId ?? null,
         // meta เป็น JSON → เก็บเฉพาะข้อมูลที่แน่ใจว่าเป็น JSON ได้

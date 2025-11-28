@@ -6,10 +6,12 @@ import React, {
   useMemo,
   useCallback,
 } from "react";
+import toast from "react-hot-toast";
 import {
   type BotItem,
   type ChatSession,
   type ChatMessage,
+  type MessageType,
   getBots,
   getChatSessions,
   getChatMessages,
@@ -93,6 +95,9 @@ const ChatCenter: React.FC = () => {
   const [sending, setSending] = useState(false);
 
   const [replyText, setReplyText] = useState("");
+  const [replyType, setReplyType] = useState<MessageType>("TEXT");
+  const [attachmentUrl, setAttachmentUrl] = useState("");
+  const [attachmentMetaInput, setAttachmentMetaInput] = useState("");
   const [error, setError] = useState<string | null>(null);
 
   const tenant = import.meta.env.VITE_TENANT || "bn9";
@@ -303,26 +308,51 @@ const ChatCenter: React.FC = () => {
   const handleSendReply = async () => {
     if (!selectedSession) return;
     const text = replyText.trim();
-    if (!text) return;
+    const attUrl = attachmentUrl.trim();
+
+    if (!text && !attUrl) {
+      toast.error("กรุณาใส่ข้อความหรือแนบลิงก์ไฟล์ก่อนส่ง");
+      return;
+    }
+
+    let attachmentMeta: unknown = undefined;
+    if (attachmentMetaInput.trim()) {
+      try {
+        attachmentMeta = JSON.parse(attachmentMetaInput);
+      } catch (err) {
+        toast.error("รูปแบบ Attachment meta ต้องเป็น JSON ที่ถูกต้อง");
+        return;
+      }
+    }
 
     try {
       setSending(true);
       setError(null);
 
-      const res = await replyChatSession(selectedSession.id, text);
+      const res = await replyChatSession(selectedSession.id, {
+        text,
+        type: replyType,
+        attachmentUrl: attUrl || undefined,
+        attachmentMeta,
+      });
 
       if (res.ok && res.message) {
         // ✅ ดึงออกมาใส่ตัวแปรแยก เพื่อให้ TS เห็นว่าเป็น ChatMessage ชัวร์
         const newMessage: ChatMessage = res.message;
         setMessages((prev) => [...prev, newMessage]);
+        toast.success("ส่งข้อความสำเร็จ");
       } else if (!res.ok && res.error) {
         setError(`ส่งข้อความไม่สำเร็จ: ${res.error}`);
+        toast.error("ส่งข้อความไม่สำเร็จ");
       }
 
       setReplyText("");
+      setAttachmentUrl("");
+      setAttachmentMetaInput("");
     } catch (e) {
       console.error(e);
       setError("ส่งข้อความไม่สำเร็จ");
+      toast.error("ส่งข้อความไม่สำเร็จ");
     } finally {
       setSending(false);
     }
@@ -603,12 +633,58 @@ const ChatCenter: React.FC = () => {
                 bubble = "bg-blue-600 text-white";
               }
 
-              const content =
-                m.text && m.text.length > 0
-                  ? m.text
-                  : m.messageType !== "text"
-                  ? `[${m.messageType || "message"}]`
-                  : "";
+              const msgTypeRaw = (m.type as string) || m.messageType || "TEXT";
+              const msgType = msgTypeRaw.toString().toUpperCase();
+              const isTextMsg = msgType === "TEXT";
+
+              let content: React.ReactNode = null;
+
+              if (isTextMsg) {
+                content = m.text || "";
+              } else if (msgType === "IMAGE" && m.attachmentUrl) {
+                content = (
+                  <div className="space-y-2">
+                    {m.text && <div className="whitespace-pre-line">{m.text}</div>}
+                    <a
+                      href={m.attachmentUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="block"
+                    >
+                      <img
+                        src={m.attachmentUrl}
+                        alt="attachment"
+                        className="max-h-64 rounded-lg border border-white/10"
+                      />
+                    </a>
+                  </div>
+                );
+              } else if (msgType === "FILE") {
+                const fileName =
+                  (m.attachmentMeta as any)?.fileName || "ไฟล์แนบ";
+                content = (
+                  <div className="space-y-1">
+                    {m.text && <div className="whitespace-pre-line">{m.text}</div>}
+                    <a
+                      href={m.attachmentUrl || "#"}
+                      target={m.attachmentUrl ? "_blank" : undefined}
+                      rel="noreferrer"
+                      className="underline text-emerald-200"
+                    >
+                      {fileName}
+                    </a>
+                  </div>
+                );
+              } else {
+                content = (
+                  <div className="space-y-1">
+                    {m.text && <div className="whitespace-pre-line">{m.text}</div>}
+                    <span className="px-2 py-1 rounded bg-black/30 border border-white/10 text-[11px]">
+                      {msgType || "MESSAGE"}
+                    </span>
+                  </div>
+                );
+              }
 
               const msgIntentCode = getMessageIntentCode(m);
               const msgIntentLabel = intentCodeToLabel(msgIntentCode);
@@ -653,6 +729,44 @@ const ChatCenter: React.FC = () => {
             })}
           </div>
 
+          {/* เครื่องมือแนบไฟล์/ประเภทข้อความ */}
+          <div className="px-4 py-3 border-t border-zinc-800 flex flex-col gap-2 text-xs bg-black/20">
+            <div className="flex flex-col md:flex-row gap-2">
+              <label className="flex items-center gap-2 text-zinc-300">
+                ประเภทข้อความ
+                <select
+                  className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1"
+                  value={replyType}
+                  onChange={(e) => setReplyType(e.target.value as MessageType)}
+                  disabled={sending}
+                >
+                  <option value="TEXT">TEXT</option>
+                  <option value="IMAGE">IMAGE</option>
+                  <option value="FILE">FILE</option>
+                  <option value="STICKER">STICKER</option>
+                  <option value="SYSTEM">SYSTEM</option>
+                </select>
+              </label>
+
+              <input
+                type="text"
+                className="flex-1 border border-zinc-700 bg-zinc-900 rounded px-3 py-1 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                placeholder="ลิงก์ไฟล์/รูป (ถ้ามี)"
+                value={attachmentUrl}
+                onChange={(e) => setAttachmentUrl(e.target.value)}
+                disabled={sending}
+              />
+            </div>
+            <input
+              type="text"
+              className="border border-zinc-700 bg-zinc-900 rounded px-3 py-1 text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              placeholder={'Attachment meta (JSON) เช่น {"fileName":"image.png"}'}
+              value={attachmentMetaInput}
+              onChange={(e) => setAttachmentMetaInput(e.target.value)}
+              disabled={sending}
+            />
+          </div>
+
           {/* กล่องส่งข้อความแอดมิน */}
           <div className="px-4 py-3 border-t border-zinc-800 flex gap-2 items-center">
             <input
@@ -672,7 +786,9 @@ const ChatCenter: React.FC = () => {
               type="button"
               onClick={handleSendReply}
               disabled={
-                !selectedSession || sending || replyText.trim().length === 0
+                !selectedSession ||
+                sending ||
+                (replyText.trim().length === 0 && attachmentUrl.trim().length === 0)
               }
               className="px-4 py-2 rounded-lg bg-emerald-600 text-xs font-medium text-white disabled:opacity-50 disabled:cursor-not-allowed hover:bg-emerald-500"
             >

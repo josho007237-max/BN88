@@ -1,5 +1,6 @@
 // src/services/chat.ts
 import { prisma } from "../lib/prisma";
+import { MessageType } from "@prisma/client";
 
 export type PlatformType = "line" | "telegram" | "facebook" | "web";
 
@@ -73,7 +74,7 @@ export async function upsertChatSessionAndMessages(opts: UpsertChatOptions) {
     platform: string;
     userId: string;
     senderType: string;
-    messageType: string;
+    type: MessageType;
     text: string;
     meta?: any;
   }[] = [];
@@ -86,7 +87,7 @@ export async function upsertChatSessionAndMessages(opts: UpsertChatOptions) {
       platform,
       userId,
       senderType: "user",
-      messageType: "text",
+      type: "TEXT",
       text: userText.trim(),
       meta: metaUser ?? undefined,
     });
@@ -100,7 +101,7 @@ export async function upsertChatSessionAndMessages(opts: UpsertChatOptions) {
       platform,
       userId,
       senderType: "bot",
-      messageType: "text",
+      type: "TEXT",
       text: botText.trim(),
       meta: metaBot ?? undefined,
     });

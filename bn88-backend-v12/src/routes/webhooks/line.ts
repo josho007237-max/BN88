@@ -53,7 +53,15 @@ type LineSource = {
   roomId?: string;
 };
 
-type LineMessage = { id?: string; type: string; text?: string };
+type LineMessage = {
+  id?: string;
+  type: string;
+  text?: string;
+  fileName?: string;
+  fileSize?: number;
+  packageId?: string;
+  stickerId?: string;
+};
 
 type LineEvent = {
   type: "message" | string;
@@ -67,11 +75,62 @@ type LineWebhookBody = {
   events?: LineEvent[];
 };
 
-function isTextMessage(
-  m: unknown
-): m is LineMessage & { type: "text"; text: string } {
-  const x = m as any;
-  return x && x.type === "text" && typeof x.text === "string";
+const LINE_CONTENT_BASE = "https://api-data.line.me/v2/bot/message";
+
+function mapLineMessage(m?: LineMessage) {
+  if (!m || typeof m !== "object") return null;
+
+  const baseMeta = {
+    lineType: m.type,
+    messageId: m.id,
+    fileName: m.fileName,
+    fileSize: m.fileSize,
+    packageId: m.packageId,
+    stickerId: m.stickerId,
+  };
+
+  if (m.type === "text") {
+    return {
+      text: m.text ?? "",
+      messageType: "TEXT" as const,
+      attachmentUrl: null,
+      attachmentMeta: baseMeta,
+    };
+  }
+
+  if (m.type === "image") {
+    return {
+      text: m.text ?? "",
+      messageType: "IMAGE" as const,
+      attachmentUrl: m.id ? `${LINE_CONTENT_BASE}/${m.id}/content` : null,
+      attachmentMeta: baseMeta,
+    };
+  }
+
+  if (m.type === "file") {
+    return {
+      text: m.text ?? m.fileName ?? "",
+      messageType: "FILE" as const,
+      attachmentUrl: m.id ? `${LINE_CONTENT_BASE}/${m.id}/content` : null,
+      attachmentMeta: baseMeta,
+    };
+  }
+
+  if (m.type === "sticker") {
+    return {
+      text: m.text ?? "",
+      messageType: "STICKER" as const,
+      attachmentUrl: null,
+      attachmentMeta: baseMeta,
+    };
+  }
+
+  return {
+    text: m.text ?? "",
+    messageType: "TEXT" as const,
+    attachmentUrl: null,
+    attachmentMeta: baseMeta,
+  };
 }
 
 /* ------------------------------------------------------------------ */
@@ -215,9 +274,14 @@ router.post("/", async (req: Request, res: Response) => {
     // 4) loop events
     for (const ev of events) {
       try {
-        // รับเฉพาะข้อความ text
-        if (ev.type !== "message" || !isTextMessage(ev.message)) {
-          results.push({ skipped: true, reason: "not_text_message" });
+        if (ev.type !== "message" || !ev.message) {
+          results.push({ skipped: true, reason: "not_message" });
+          continue;
+        }
+
+        const mapped = mapLineMessage(ev.message as LineMessage);
+        if (!mapped) {
+          results.push({ skipped: true, reason: "unsupported_message" });
           continue;
         }
 
@@ -227,7 +291,7 @@ router.post("/", async (req: Request, res: Response) => {
           ev.source?.roomId ||
           "unknown";
 
-        const text = ev.message.text || "";
+        const text = mapped.text || "";
 
         // ตอนนี้ยังไม่ได้ดึง profile จาก LINE จึงใช้ userId/groupId/roomId แทน displayName ไปก่อน
         const displayName =
@@ -236,7 +300,7 @@ router.post("/", async (req: Request, res: Response) => {
           ev.source?.roomId ||
           undefined;
 
-        const platformMessageId = ev.message.id ?? undefined;
+        const platformMessageId = (ev.message as LineMessage).id ?? undefined;
 
         // 5) ให้ pipeline กลางจัดการทั้งหมด (chat/case/stat/AI)
         const { reply, intent, isIssue } = await processIncomingMessage({
@@ -244,6 +308,9 @@ router.post("/", async (req: Request, res: Response) => {
           platform,
           userId,
           text,
+          messageType: mapped.messageType,
+          attachmentUrl: mapped.attachmentUrl ?? undefined,
+          attachmentMeta: mapped.attachmentMeta,
           displayName,
           platformMessageId,
           rawPayload: ev,

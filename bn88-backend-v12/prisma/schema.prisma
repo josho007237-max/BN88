@@ -287,8 +287,10 @@ model ChatMessage {
   sessionId String
 
   senderType        String // "user" | "bot" | "admin"
-  messageType       String // "text" | "image" | ...
+  type              MessageType @default(TEXT)
   text              String?
+  attachmentUrl     String?
+  attachmentMeta    Json?
   platformMessageId String? // id ของข้อความจาก platform
   meta              Json?
 
@@ -296,4 +298,12 @@ model ChatMessage {
 
   @@unique([sessionId, platformMessageId], map: "ChatMessage_session_platformMsg_unique")
   @@index([sessionId, createdAt], map: "ChatMessage_bySession")
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  FILE
+  STICKER
+  SYSTEM
 }
