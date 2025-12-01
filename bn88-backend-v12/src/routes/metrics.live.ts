@@ -74,11 +74,14 @@ export function metricsSseHandler(req: Request, res: Response) {
   const tick = setInterval(() => send(getMetricsSnapshot()), 5_000);
 
   send(getMetricsSnapshot());
-  log.info("[metrics] client connected", { requestId });
+  log.info("[metrics] client connected", { requestId, path: req.path });
 
   req.on("close", () => {
     clearInterval(hb);
     clearInterval(tick);
-    log.info("[metrics] client disconnected", { requestId });
+    log.info("[metrics] client disconnected", { requestId, path: req.path });
   });
 }
+
+// Backwards-compatible alias for the new /metrics/stream endpoint
+export const metricsStreamHandler = metricsSseHandler;

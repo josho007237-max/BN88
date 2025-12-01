@@ -8,6 +8,15 @@ import React, {
 } from "react";
 import toast from "react-hot-toast";
 import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import {
   type BotItem,
   type ChatSession,
   type ChatMessage,
@@ -256,7 +265,8 @@ const ChatCenter: React.FC = () => {
   /* -------------------------- Metrics SSE monitor -------------------------- */
 
   useEffect(() => {
-    const url = `${apiBase}/live/metrics`;
+    const base = apiBase.replace(/\/$/, "");
+    const url = `${base}/metrics/stream`;
     const es = new EventSource(url);
 
     const handleMetrics = (ev: MessageEvent) => {
@@ -484,6 +494,15 @@ const ChatCenter: React.FC = () => {
     () => Object.entries(metrics?.perChannel ?? {}),
     [metrics?.perChannel]
   );
+  const channelMetricsData = useMemo(
+    () =>
+      channelMetrics.map(([channelId, stats]) => ({
+        channelId,
+        sent: stats.sent ?? 0,
+        errors: stats.errors ?? 0,
+      })),
+    [channelMetrics]
+  );
   const maxChannelSent = useMemo(() => {
     return channelMetrics.reduce((acc, [, v]) => Math.max(acc, v.sent || 0), 1);
   }, [channelMetrics]);
@@ -561,7 +580,7 @@ const ChatCenter: React.FC = () => {
             {metrics?.deliveryTotal ?? 0}
           </div>
           <div className="text-[11px] text-zinc-500 mt-1">
-            realtime via SSE (/live/metrics)
+            realtime via SSE (/metrics/stream)
           </div>
         </div>
         <div className="bg-[#14171a] border border-zinc-800 rounded-xl p-4">
@@ -598,29 +617,17 @@ const ChatCenter: React.FC = () => {
         {channelMetrics.length === 0 ? (
           <div className="text-xs text-zinc-400">ยังไม่มีข้อมูล</div>
         ) : (
-          <div className="space-y-2">
-            {channelMetrics.map(([channelId, stats]) => {
-              const width = Math.max(8, (stats.sent / maxChannelSent) * 100);
-              return (
-                <div
-                  key={channelId}
-                  className="bg-zinc-900/60 border border-zinc-800 rounded-lg px-3 py-2"
-                >
-                  <div className="flex items-center justify-between text-xs text-zinc-300">
-                    <span className="truncate mr-2">{channelId}</span>
-                    <span className="text-zinc-400">
-                      sent {stats.sent} / err {stats.errors}
-                    </span>
-                  </div>
-                  <div className="mt-2 h-2 w-full bg-zinc-800 rounded-full overflow-hidden">
-                    <div
-                      className="h-2 bg-emerald-500"
-                      style={{ width: `${width}%` }}
-                    />
-                  </div>
-                </div>
-              );
-            })}
+          <div className="h-56">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={channelMetricsData} margin={{ top: 8, right: 8, left: -16 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+                <XAxis dataKey="channelId" tick={{ fontSize: 10, fill: "#a1a1aa" }} interval={0} angle={-20} textAnchor="end" height={50} />
+                <YAxis tick={{ fontSize: 10, fill: "#a1a1aa" }} allowDecimals={false} />
+                <Tooltip cursor={{ fill: "#18181b" }} contentStyle={{ background: "#09090b", border: "1px solid #27272a", borderRadius: 8 }} />
+                <Bar dataKey="sent" fill="#34d399" radius={[4, 4, 0, 0]} name="Sent" />
+                <Bar dataKey="errors" fill="#f87171" radius={[4, 4, 0, 0]} name="Errors" />
+              </BarChart>
+            </ResponsiveContainer>
           </div>
         )}
       </div>
