@@ -221,6 +221,7 @@ router.post("/", async (req: Request, res: Response) => {
       displayName: from?.first_name || from?.username,
       platformMessageId,
       rawPayload: update,
+      requestId,
     });
 
     const hasReply = !!reply?.trim();

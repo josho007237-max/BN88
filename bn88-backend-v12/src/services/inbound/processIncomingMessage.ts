@@ -4,6 +4,9 @@ import { prisma } from "../../lib/prisma";
 import { getOpenAIClientForBot } from "../openai/getOpenAIClientForBot";
 import { sseHub } from "../../lib/sseHub";
 import { MessageType } from "@prisma/client";
+import { sendTelegramMessage } from "../telegram";
+import { createRequestLogger } from "../../utils/logger";
+import { enqueueFollowUpJob } from "../../queues/message.queue";
 
 export type SupportedPlatform = "line" | "telegram" | "facebook";
 
@@ -20,12 +23,14 @@ export type ProcessIncomingParams = {
   displayName?: string;
   platformMessageId?: string;
   rawPayload?: unknown;
+  requestId?: string;
 };
 
 export type ProcessIncomingResult = {
   reply: string;
   intent: string;
   isIssue: boolean;
+  actions?: ActionExecutionResult[];
 };
 
 // Bot + relations ที่ pipeline นี้ต้องใช้
@@ -56,6 +61,34 @@ type KnowledgeChunkLite = {
   docId: string;
   docTitle: string;
   content: string;
+};
+
+type ActionMessagePayload = {
+  type?: MessageType;
+  text?: string;
+  attachmentUrl?: string | null;
+  attachmentMeta?: unknown;
+};
+
+type SendMessageAction = {
+  type: "send_message";
+  message: ActionMessagePayload;
+};
+
+type TagAction = { type: "tag_add" | "tag_remove"; tag: string };
+type SegmentAction = { type: "segment_update"; segment: unknown };
+type FollowUpAction = {
+  type: "follow_up";
+  delaySeconds?: number;
+  message: ActionMessagePayload;
+};
+
+type ActionItem = SendMessageAction | TagAction | SegmentAction | FollowUpAction;
+
+export type ActionExecutionResult = {
+  type: ActionItem["type"];
+  status: "handled" | "skipped" | "scheduled" | "error";
+  detail?: string;
 };
 
 async function getRelevantKnowledgeForBotMessage(params: {
@@ -140,6 +173,84 @@ function buildKnowledgeSummary(chunks: KnowledgeChunkLite[]): {
   };
 }
 
+function normalizeActionMessage(
+  payload: ActionMessagePayload,
+  fallbackText: string
+): Required<ActionMessagePayload> {
+  const type = payload.type ?? MessageType.TEXT;
+  const text = payload.text ?? (payload.attachmentUrl ? fallbackText : "");
+  return {
+    type,
+    text,
+    attachmentUrl: payload.attachmentUrl ?? null,
+    attachmentMeta: payload.attachmentMeta ?? undefined,
+  };
+}
+
+async function sendLinePushMessage(args: {
+  channelAccessToken?: string | null;
+  to: string;
+  payload: Required<ActionMessagePayload>;
+}) {
+  const { channelAccessToken, to, payload } = args;
+  if (!channelAccessToken) return false;
+
+  const f = (globalThis as any).fetch as typeof fetch | undefined;
+  if (!f) return false;
+
+  const messages: any[] = [];
+
+  if (payload.type === MessageType.IMAGE && payload.attachmentUrl) {
+    messages.push({
+      type: "image",
+      originalContentUrl: payload.attachmentUrl,
+      previewImageUrl: payload.attachmentUrl,
+    });
+  } else if (payload.type === MessageType.FILE && payload.attachmentUrl) {
+    messages.push({ type: "text", text: payload.text || payload.attachmentUrl });
+  } else if (payload.type === MessageType.STICKER) {
+    messages.push({ type: "text", text: payload.text || "[sticker]" });
+  } else if (payload.type === MessageType.SYSTEM) {
+    messages.push({ type: "text", text: payload.text || "[system]" });
+  } else {
+    messages.push({ type: "text", text: payload.text || "" });
+  }
+
+  const resp = await f("https://api.line.me/v2/bot/message/push", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${channelAccessToken}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ to, messages }),
+  });
+
+  return resp.ok;
+}
+
+async function sendTelegramPayload(args: {
+  botToken?: string | null;
+  chatId: string;
+  payload: Required<ActionMessagePayload>;
+}) {
+  const { botToken, chatId, payload } = args;
+  if (!botToken) return false;
+
+  const options = {
+    photoUrl:
+      payload.type === MessageType.IMAGE ? payload.attachmentUrl ?? undefined : undefined,
+    documentUrl:
+      payload.type === MessageType.FILE ? payload.attachmentUrl ?? undefined : undefined,
+    documentName:
+      payload.type === MessageType.FILE
+        ? (payload.attachmentMeta as any)?.fileName ?? undefined
+        : undefined,
+  };
+
+  const textForTg = payload.text || payload.attachmentUrl || "";
+  return sendTelegramMessage(botToken, chatId, textForTg, undefined, options);
+}
+
 function todayKey(): string {
   // YYYY-MM-DD (ใช้เป็น key ของ StatDaily)
   return new Date().toISOString().slice(0, 10);
@@ -154,6 +265,227 @@ function safeBroadcast(event: any) {
   }
 }
 
+type ActionContext = {
+  bot: BotWithRelations;
+  session: { id: string };
+  platform: SupportedPlatform;
+  userId: string;
+  requestId?: string;
+  log: ReturnType<typeof createRequestLogger>;
+};
+
+async function executeSendAction(
+  action: SendMessageAction,
+  ctx: ActionContext
+): Promise<ActionExecutionResult> {
+  const { bot, session, platform, userId, log } = ctx;
+  const normalized = normalizeActionMessage(
+    action.message,
+    action.message.attachmentUrl ? "attachment" : ""
+  );
+
+  try {
+    const now = new Date();
+    const botChatMessage = await prisma.chatMessage.create({
+      data: {
+        tenant: bot.tenant,
+        botId: bot.id,
+        platform,
+        sessionId: session.id,
+        senderType: "bot",
+        type: normalized.type,
+        text: normalized.text || null,
+        attachmentUrl: normalized.attachmentUrl ?? null,
+        attachmentMeta: normalized.attachmentMeta ?? undefined,
+        meta: { source: platform, via: "action" },
+      },
+      select: {
+        id: true,
+        text: true,
+        type: true,
+        attachmentUrl: true,
+        attachmentMeta: true,
+        createdAt: true,
+      },
+    });
+
+    await prisma.chatSession.update({
+      where: { id: session.id },
+      data: {
+        lastMessageAt: now,
+        lastText: normalized.text || normalized.attachmentUrl || undefined,
+        lastDirection: "bot",
+      },
+    });
+
+    safeBroadcast({
+      type: "chat:message:new",
+      tenant: bot.tenant,
+      botId: bot.id,
+      sessionId: session.id,
+      message: botChatMessage,
+    });
+
+    let delivered = false;
+    if (platform === "line") {
+      delivered = await sendLinePushMessage({
+        channelAccessToken: bot.secret?.channelAccessToken,
+        to: userId,
+        payload: normalized,
+      });
+    } else if (platform === "telegram") {
+      delivered = await sendTelegramPayload({
+        botToken: bot.secret?.telegramBotToken,
+        chatId: userId,
+        payload: normalized,
+      });
+    }
+
+    log.info("[action] send_message", {
+      sessionId: session.id,
+      platform,
+      delivered,
+      type: normalized.type,
+      requestId: ctx.requestId,
+    });
+
+    return {
+      type: action.type,
+      status: delivered ? "handled" : "skipped",
+      detail: delivered ? "sent_to_platform" : "stored_only",
+    };
+  } catch (err) {
+    log.error("[action] send_message error", err);
+    return { type: action.type, status: "error", detail: String(err) };
+  }
+}
+
+async function executeSystemNote(
+  text: string,
+  ctx: ActionContext,
+  meta?: Record<string, unknown>
+) {
+  await prisma.chatMessage.create({
+    data: {
+      tenant: ctx.bot.tenant,
+      botId: ctx.bot.id,
+      platform: ctx.platform,
+      sessionId: ctx.session.id,
+      senderType: "bot",
+      type: MessageType.SYSTEM,
+      text,
+      meta: meta ? (meta as any) : undefined,
+    },
+  });
+}
+
+async function executeTagAction(
+  action: TagAction,
+  ctx: ActionContext
+): Promise<ActionExecutionResult> {
+  try {
+    await executeSystemNote(`[${action.type}] ${action.tag}`, ctx, {
+      action: action.type,
+      tag: action.tag,
+    });
+    ctx.log.info("[action] tag", {
+      type: action.type,
+      tag: action.tag,
+      sessionId: ctx.session.id,
+      requestId: ctx.requestId,
+    });
+    return { type: action.type, status: "handled" };
+  } catch (err) {
+    ctx.log.error("[action] tag error", err);
+    return { type: action.type, status: "error", detail: String(err) };
+  }
+}
+
+async function executeSegmentAction(
+  action: SegmentAction,
+  ctx: ActionContext
+): Promise<ActionExecutionResult> {
+  try {
+    await executeSystemNote("[segment_update]", ctx, {
+      action: action.type,
+      segment: action.segment,
+    });
+    ctx.log.info("[action] segment_update", {
+      sessionId: ctx.session.id,
+      requestId: ctx.requestId,
+    });
+    return { type: action.type, status: "handled" };
+  } catch (err) {
+    ctx.log.error("[action] segment_update error", err);
+    return { type: action.type, status: "error", detail: String(err) };
+  }
+}
+
+async function executeFollowUpAction(
+  action: FollowUpAction,
+  ctx: ActionContext
+): Promise<ActionExecutionResult> {
+  const normalized = normalizeActionMessage(
+    action.message,
+    action.message.attachmentUrl ? "attachment" : ""
+  );
+  const delayMs = Math.max(1, (action.delaySeconds ?? 60) * 1000);
+  const jobId = `${ctx.session.id}:${normalized.type}:${delayMs}`;
+
+  try {
+    await enqueueFollowUpJob({
+      id: jobId,
+      delayMs,
+      payload: normalized,
+      requestId: ctx.requestId,
+      handler: async (payload) => {
+        await executeSendAction({ type: "send_message", message: payload }, ctx);
+      },
+    });
+
+    ctx.log.info("[action] follow_up scheduled", {
+      sessionId: ctx.session.id,
+      delayMs,
+      requestId: ctx.requestId,
+    });
+
+    return { type: action.type, status: "scheduled", detail: jobId };
+  } catch (err) {
+    ctx.log.error("[action] follow_up error", err);
+    return { type: action.type, status: "error", detail: String(err) };
+  }
+}
+
+async function executeActions(actions: ActionItem[], ctx: ActionContext) {
+  const results: ActionExecutionResult[] = [];
+
+  for (const action of actions) {
+    if (!action || typeof action !== "object" || !("type" in action)) continue;
+
+    if (action.type === "send_message") {
+      results.push(await executeSendAction(action, ctx));
+      continue;
+    }
+
+    if (action.type === "tag_add" || action.type === "tag_remove") {
+      results.push(await executeTagAction(action, ctx));
+      continue;
+    }
+
+    if (action.type === "segment_update") {
+      results.push(await executeSegmentAction(action, ctx));
+      continue;
+    }
+
+    if (action.type === "follow_up") {
+      results.push(await executeFollowUpAction(action, ctx));
+      continue;
+    }
+  }
+
+  return results;
+}
+
 export async function processIncomingMessage(
   params: ProcessIncomingParams
 ): Promise<ProcessIncomingResult> {
@@ -165,7 +497,10 @@ export async function processIncomingMessage(
     displayName,
     platformMessageId,
     rawPayload,
+    requestId,
   } = params;
+
+  const log = createRequestLogger(requestId);
 
   // ถ้าข้อความว่าง ให้ตอบ fallback เลย (กันเคสส่งมาเป็น empty)
   if (!text || !text.trim()) {
@@ -173,6 +508,7 @@ export async function processIncomingMessage(
       reply: "ขออภัยค่ะ ระบบขัดข้องชั่วคราว ลองใหม่อีกครั้งภายหลังนะคะ",
       intent: "other",
       isIssue: false,
+      actions: [],
     };
   }
 
@@ -181,7 +517,11 @@ export async function processIncomingMessage(
     reply: "ขออภัยค่ะ ระบบขัดข้องชั่วคราว ลองใหม่อีกครั้งภายหลังนะคะ",
     intent: "other",
     isIssue: false,
+    actions: [],
   };
+
+  let actionResults: ActionExecutionResult[] = [];
+  let aiActions: ActionItem[] = [];
 
   try {
     const bot = await loadBotWithRelations(botId);
@@ -295,7 +635,7 @@ export async function processIncomingMessage(
 
     // ถ้าไม่ใช่ข้อความ text ให้หยุดที่นี่ (ไม่ต้องเรียก AI)
     if (incomingType !== "TEXT") {
-      return { reply: "", intent: "non_text", isIssue: false };
+      return { reply: "", intent: "non_text", isIssue: false, actions: [] };
     }
 
     // 4) เตรียม client OpenAI ตาม secret/config ของบอท
@@ -410,6 +750,7 @@ ${intentsForPrompt}
       reply: "ขอบคุณสำหรับข้อมูลค่ะ",
       intent: "other",
       isIssue: false,
+      actions: [],
     };
 
     try {
@@ -422,7 +763,10 @@ ${intentsForPrompt}
             : "ขอบคุณสำหรับข้อมูลค่ะ",
         intent: typeof json.intent === "string" ? json.intent : "other",
         isIssue: Boolean(json.isIssue),
+        actions: [],
       };
+
+      aiActions = Array.isArray(json.actions) ? (json.actions as ActionItem[]) : [];
     } catch (err) {
       console.error(
         "[processIncomingMessage] JSON parse error from GPT",
@@ -606,13 +950,26 @@ ${intentsForPrompt}
       }
     }
 
-    return { reply, intent, isIssue };
+    const actionsToRun = aiActions;
+
+    if (actionsToRun.length > 0) {
+      actionResults = await executeActions(actionsToRun, {
+        bot: bot as BotWithRelations,
+        session,
+        platform,
+        userId,
+        requestId,
+        log,
+      });
+    }
+
+    return { reply, intent, isIssue, actions: actionResults };
   } catch (err) {
     console.error(
       "[processIncomingMessage] fatal error",
       (err as any)?.message ?? err
     );
     // อย่าโยน error ออกไป ให้ส่ง fallback กลับ
-    return fallback;
+    return { ...fallback, actions: actionResults };
   }
 }

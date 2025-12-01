@@ -348,6 +348,7 @@ router.post("/", async (req: Request, res: Response) => {
           displayName,
           platformMessageId,
           rawPayload: ev,
+          requestId,
         });
 
         let replySent = false;

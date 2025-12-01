@@ -8,6 +8,7 @@ import {
   type SupportedPlatform,
 } from "../../services/inbound/processIncomingMessage";
 import { MessageType } from "@prisma/client";
+import { createRequestLogger, getRequestId } from "../../utils/logger";
 
 const router = Router();
 
@@ -178,6 +179,8 @@ router.get("/", async (req: Request, res: Response) => {
 /* ------------------------------ Webhook POST ----------------------------- */
 
 router.post("/", async (req: Request, res: Response) => {
+  const requestId = getRequestId(req);
+  const log = createRequestLogger(requestId);
   try {
     const tenant =
       (req.headers["x-tenant"] as string) || config.TENANT_DEFAULT || "bn9";
@@ -233,6 +236,7 @@ router.post("/", async (req: Request, res: Response) => {
           displayName: userId,
           platformMessageId,
           rawPayload: ev,
+          requestId,
         });
 
         let replied = false;
@@ -240,7 +244,7 @@ router.post("/", async (req: Request, res: Response) => {
           try {
             replied = await sendFacebookMessage(pageAccessToken, userId, reply);
           } catch (err) {
-            console.error("[FACEBOOK sendMessage error]", err);
+            log.error("[FACEBOOK sendMessage error]", err);
           }
         }
 
@@ -248,10 +252,12 @@ router.post("/", async (req: Request, res: Response) => {
       }
     }
 
-    return res.status(200).json({ ok: true, results });
+    return res.status(200).json({ ok: true, results, requestId });
   } catch (e) {
-    console.error("[FACEBOOK WEBHOOK ERROR]", e);
-    return res.status(500).json({ ok: false, message: "internal_error" });
+    log.error("[FACEBOOK WEBHOOK ERROR]", e);
+    return res
+      .status(500)
+      .json({ ok: false, message: "internal_error", requestId });
   }
 });
 
