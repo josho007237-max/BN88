@@ -1,33 +1,37 @@
-// src/scripts/setTelegramTokenForBot.ts
+// src/scripts/setTelegramToken.ts
 import { prisma } from "../lib/prisma";
 
 async function main() {
-  // 1) ใส่ Telegram Bot Token จาก BotFather ของคุณ
-  const TELEGRAM_BOT_TOKEN =
-    "8011188189:AAGlhbdbVHuxPh0Cf9VRUJE7hC_tBFpuapE"; // <-- แก้ให้ตรงกับของคุณ
+  const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+  const TARGET_BOT_ID = process.env.BOT_ID;
 
-  // 2) ใส่ botId ของบอทที่ใช้จริง (ดูจาก log ตอนนี้)
-  const TARGET_BOT_ID = "cmic1cfmq000twicqst9oc6k"; // <-- ตอนนี้ของคุณคืออันนี้
+  if (!TELEGRAM_BOT_TOKEN) {
+    throw new Error("Please provide TELEGRAM_BOT_TOKEN in env (never hard-code secrets)");
+  }
 
-  // 3) ตรวจว่ามีบอทนี้จริงไหม
+  if (!TARGET_BOT_ID) {
+    throw new Error("Please provide BOT_ID in env to select which bot to update");
+  }
+
   const bot = await prisma.bot.findUnique({
     where: { id: TARGET_BOT_ID },
   });
 
   if (!bot) {
-    throw new Error(`ไม่พบบอท id=${TARGET_BOT_ID} ในตาราง Bot`);
+    throw new Error(`Bot not found: id=${TARGET_BOT_ID}`);
   }
 
   console.log(
-    "จะตั้งค่า telegramBotToken ให้ botId =",
+    "Updating telegramBotToken for botId =",
     bot.id,
     "name =",
     bot.name,
     "platform =",
-    bot.platform
+    bot.platform,
+    "tenant =",
+    bot.tenant
   );
 
-  // 4) upsert เข้า BotSecret
   await prisma.botSecret.upsert({
     where: { botId: bot.id },
     update: {
@@ -44,7 +48,7 @@ async function main() {
 
 main()
   .catch((e) => {
-    console.error("[setTelegramTokenForBot] ERROR", e);
+    console.error("[setTelegramToken] ERROR", e);
     process.exit(1);
   })
   .finally(async () => {
