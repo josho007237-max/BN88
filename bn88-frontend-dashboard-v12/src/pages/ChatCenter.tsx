@@ -29,6 +29,13 @@ type PlatformFilterValue =
   | "webchat"
   | "other";
 
+type MetricsSnapshot = {
+  deliveryTotal: number;
+  errorTotal: number;
+  perChannel: Record<string, { sent: number; errors: number }>;
+  updatedAt?: string;
+};
+
 /* ---------------------- Intent helpers (frontend only) ---------------------- */
 
 /** ดึง intent code ล่าสุดจาก session (ลองอ่านจากหลาย field) */
@@ -99,6 +106,7 @@ const ChatCenter: React.FC = () => {
   const [attachmentUrl, setAttachmentUrl] = useState("");
   const [attachmentMetaInput, setAttachmentMetaInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
 
   const tenant = import.meta.env.VITE_TENANT || "bn9";
   const apiBase = getApiBase();
@@ -244,6 +252,37 @@ const ChatCenter: React.FC = () => {
       window.clearInterval(timer);
     };
   }, [selectedBotId, selectedSession?.id, fetchSessions, fetchMessages]);
+
+  /* -------------------------- Metrics SSE monitor -------------------------- */
+
+  useEffect(() => {
+    const url = `${apiBase}/live/metrics`;
+    const es = new EventSource(url);
+
+    const handleMetrics = (ev: MessageEvent) => {
+      try {
+        const data = JSON.parse(ev.data || "{}") as MetricsSnapshot;
+        setMetrics(data);
+      } catch (err) {
+        console.warn("[ChatCenter metrics SSE parse]", err);
+      }
+    };
+
+    es.addEventListener("metrics", handleMetrics);
+
+    es.onerror = () => {
+      console.warn("[ChatCenter metrics SSE] connection error");
+    };
+
+    return () => {
+      es.removeEventListener("metrics", handleMetrics as any);
+      try {
+        es.close();
+      } catch (err) {
+        console.warn("[ChatCenter metrics SSE close]", err);
+      }
+    };
+  }, [apiBase]);
 
   /* ------------------- SSE: รับข้อความใหม่แบบ realtime ------------------- */
 
@@ -441,6 +480,14 @@ const ChatCenter: React.FC = () => {
     ? getSessionIntentCode(selectedSession)
     : null;
 
+  const channelMetrics = useMemo(
+    () => Object.entries(metrics?.perChannel ?? {}),
+    [metrics?.perChannel]
+  );
+  const maxChannelSent = useMemo(() => {
+    return channelMetrics.reduce((acc, [, v]) => Math.max(acc, v.sent || 0), 1);
+  }, [channelMetrics]);
+
   /* ------------------------------ UI หลัก ------------------------------ */
 
   return (
@@ -504,6 +551,78 @@ const ChatCenter: React.FC = () => {
             )}
           </div>
         </div>
+      </div>
+
+      {/* Metrics overview */}
+      <div className="grid gap-3 md:grid-cols-3">
+        <div className="bg-[#14171a] border border-zinc-800 rounded-xl p-4">
+          <div className="text-xs text-zinc-400 mb-1">Deliveries</div>
+          <div className="text-2xl font-semibold text-emerald-300">
+            {metrics?.deliveryTotal ?? 0}
+          </div>
+          <div className="text-[11px] text-zinc-500 mt-1">
+            realtime via SSE (/live/metrics)
+          </div>
+        </div>
+        <div className="bg-[#14171a] border border-zinc-800 rounded-xl p-4">
+          <div className="text-xs text-zinc-400 mb-1">Errors</div>
+          <div className="text-2xl font-semibold text-rose-300">
+            {metrics?.errorTotal ?? 0}
+          </div>
+          <div className="text-[11px] text-zinc-500 mt-1">
+            รวมข้อผิดพลาดจากการส่งข้อความ
+          </div>
+        </div>
+        <div className="bg-[#14171a] border border-zinc-800 rounded-xl p-4">
+          <div className="text-xs text-zinc-400 mb-1">Last update</div>
+          <div className="text-lg font-semibold text-zinc-100">
+            {metrics?.updatedAt
+              ? new Date(metrics.updatedAt).toLocaleTimeString()
+              : "-"}
+          </div>
+          <div className="text-[11px] text-zinc-500 mt-1">
+            base: {apiBase.replace(/https?:\/\//, "")}
+          </div>
+        </div>
+      </div>
+
+      <div className="bg-[#14171a] border border-zinc-800 rounded-xl p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div className="font-semibold text-sm text-zinc-100">
+            Per-channel deliveries
+          </div>
+          <div className="text-[11px] text-zinc-500">
+            platform:bot grouped
+          </div>
+        </div>
+        {channelMetrics.length === 0 ? (
+          <div className="text-xs text-zinc-400">ยังไม่มีข้อมูล</div>
+        ) : (
+          <div className="space-y-2">
+            {channelMetrics.map(([channelId, stats]) => {
+              const width = Math.max(8, (stats.sent / maxChannelSent) * 100);
+              return (
+                <div
+                  key={channelId}
+                  className="bg-zinc-900/60 border border-zinc-800 rounded-lg px-3 py-2"
+                >
+                  <div className="flex items-center justify-between text-xs text-zinc-300">
+                    <span className="truncate mr-2">{channelId}</span>
+                    <span className="text-zinc-400">
+                      sent {stats.sent} / err {stats.errors}
+                    </span>
+                  </div>
+                  <div className="mt-2 h-2 w-full bg-zinc-800 rounded-full overflow-hidden">
+                    <div
+                      className="h-2 bg-emerald-500"
+                      style={{ width: `${width}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* ส่วนแชทหลัก */}

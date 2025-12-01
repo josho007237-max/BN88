@@ -10,6 +10,7 @@ import {
   enqueueFollowUpJob,
   enqueueRateLimitedSend,
 } from "../../queues/message.queue";
+import { recordDeliveryMetric } from "../../routes/metrics.live";
 
 export type SupportedPlatform = "line" | "telegram" | "facebook";
 
@@ -356,6 +357,8 @@ async function executeSendAction(
       ? false
       : Boolean(rateLimited.result);
 
+    recordDeliveryMetric(`${platform}:${bot.id}`, delivered, ctx.requestId);
+
     if (rateLimited.scheduled) {
       log.warn("[action] send_message rate-limited", {
         sessionId: session.id,
@@ -380,6 +383,7 @@ async function executeSendAction(
     };
   } catch (err) {
     log.error("[action] send_message error", err);
+    recordDeliveryMetric(`${platform}:${bot.id}`, false, ctx.requestId);
     return { type: action.type, status: "error", detail: String(err) };
   }
 }

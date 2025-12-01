@@ -6,6 +6,8 @@ import { sseHub } from "../../lib/sseHub";
 import { sendTelegramMessage } from "../../services/telegram";
 import { MessageType } from "@prisma/client";
 import { z } from "zod";
+import { recordDeliveryMetric } from "../metrics.live";
+import { createRequestLogger, getRequestId } from "../../utils/logger";
 
 const router = Router();
 const TENANT_DEFAULT = process.env.TENANT_DEFAULT || "bn9";
@@ -288,6 +290,8 @@ router.post(
   "/sessions/:id/reply",
   async (req: Request, res: Response): Promise<Response> => {
     try {
+      const requestId = getRequestId(req);
+      const log = createRequestLogger(requestId);
       const tenant = getTenant(req);
       const sessionId = String(req.params.id);
       const parsed = replyPayloadSchema.safeParse(req.body ?? {});
@@ -385,6 +389,15 @@ router.post(
           session.id
         );
       }
+
+      recordDeliveryMetric(`${platform}:${bot.id}`, delivered, requestId);
+      log.info("[admin chat reply] delivery", {
+        delivered,
+        platform,
+        botId: bot.id,
+        sessionId: session.id,
+        requestId,
+      });
 
       // บันทึกข้อความฝั่ง admin ลง ChatMessage
       const now = new Date();

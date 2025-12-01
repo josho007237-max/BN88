@@ -21,6 +21,7 @@ import { config } from "./config";
 import { logger } from "./mw/logger";
 import { authGuard } from "./mw/auth";
 import { sseHandler } from "./live";
+import { metricsSseHandler } from "./routes/metrics.live";
 import { events } from "./routes/events";
 
 /* Core routes */
@@ -164,6 +165,7 @@ app.use("/api/ai/answer", aiAnswerRoute);
 /* Realtime */
 
 app.get("/api/live/:tenant", sseHandler);
+app.get("/api/live/metrics", metricsSseHandler);
 
 /* Webhooks */
 
