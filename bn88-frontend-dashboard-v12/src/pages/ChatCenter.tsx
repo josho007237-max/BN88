@@ -26,6 +26,7 @@ import {
   getChatMessages,
   replyChatSession,
   getApiBase,
+  searchChatMessages,
 } from "../lib/api";
 
 const POLL_INTERVAL_MS = 3000; // 3 วินาที
@@ -104,6 +105,9 @@ const ChatCenter: React.FC = () => {
   const [selectedSession, setSelectedSession] =
     useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [searchResults, setSearchResults] = useState<ChatMessage[] | null>(null);
+  const [searching, setSearching] = useState(false);
 
   const [loadingBots, setLoadingBots] = useState(false);
   const [loadingSessions, setLoadingSessions] = useState(false);
@@ -345,13 +349,14 @@ const ChatCenter: React.FC = () => {
         behavior: "smooth",
       });
     }
-  }, [messages.length]);
+  }, [messages.length, searchResults?.length]);
 
   /* ----------------------------- handlers ----------------------------- */
 
   const handleSelectSession = (s: ChatSession) => {
     setSelectedSession(s);
     setReplyText("");
+    setSearchResults(null);
   };
 
   const handleSendReply = async () => {
@@ -416,6 +421,44 @@ const ChatCenter: React.FC = () => {
     }
   };
 
+  const handleSearchSubmit: React.FormEventHandler<HTMLFormElement> = async (
+    e
+  ) => {
+    e.preventDefault();
+    const q = searchTerm.trim();
+    if (!q) {
+      setSearchResults(null);
+      if (selectedSession) {
+        await fetchMessages(selectedSession.id);
+      }
+      return;
+    }
+
+    try {
+      setSearching(true);
+      const items = await searchChatMessages({
+        q,
+        botId: selectedBotId,
+        limit: 200,
+      });
+      setSearchResults(items);
+      toast.success(`พบ ${items.length} ข้อความที่ตรงกับคำค้นหา`);
+    } catch (err) {
+      console.error("search error", err);
+      toast.error("ค้นหาข้อความไม่สำเร็จ");
+    } finally {
+      setSearching(false);
+    }
+  };
+
+  const handleClearSearch = async () => {
+    setSearchTerm("");
+    setSearchResults(null);
+    if (selectedSession) {
+      await fetchMessages(selectedSession.id);
+    }
+  };
+
   const currentBot = bots.find((b) => b.id === selectedBotId) || null;
 
   /* ------------------------- filter ห้องแชทตาม query + platform ------------------------- */
@@ -443,6 +486,11 @@ const ChatCenter: React.FC = () => {
     });
   }, [sessions, sessionQuery, platformFilter]);
 
+  const displayedMessages = useMemo(
+    () => searchResults ?? messages,
+    [searchResults, messages]
+  );
+
   /* ------------------------- group messages by day ------------------------- */
 
   const messagesWithDateHeader = useMemo(() => {
@@ -450,7 +498,7 @@ const ChatCenter: React.FC = () => {
       ChatMessage & { _showDateHeader?: boolean; _dateLabel?: string }
     > = [];
     let lastDateKey = "";
-    for (const m of messages) {
+    for (const m of displayedMessages) {
       const d = new Date(m.createdAt);
       const dateKey = d.toISOString().slice(0, 10); // YYYY-MM-DD
       let show = false;
@@ -463,7 +511,7 @@ const ChatCenter: React.FC = () => {
       result.push({ ...m, _showDateHeader: show, _dateLabel: label });
     }
     return result;
-  }, [messages]);
+  }, [displayedMessages]);
 
   /* ------------------------- helper แปลง platform เป็น label ------------------------- */
 
@@ -489,6 +537,8 @@ const ChatCenter: React.FC = () => {
   const selectedSessionIntentCode = selectedSession
     ? getSessionIntentCode(selectedSession)
     : null;
+
+  const isSearchMode = Boolean(searchResults);
 
   const channelMetrics = useMemo(
     () => Object.entries(metrics?.perChannel ?? {}),
@@ -700,20 +750,52 @@ const ChatCenter: React.FC = () => {
 
         {/* ขวา: ข้อความในห้อง */}
         <div className="flex-1 border border-zinc-700 rounded-xl bg-zinc-900/60 flex flex-col min-h-0">
-          <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
-            <div className="font-semibold text-sm">
-              {selectedSession
-                ? selectedSession.displayName || selectedSession.userId
-                : "ไม่มีห้องแชทที่เลือก"}
-            </div>
-            {selectedSession && (
-              <div className="flex items-center gap-2 text-xs text-zinc-400">
-                <span>
-                  platform: {platformLabel(selectedSession.platform)}
-                </span>
-                <IntentBadge code={selectedSessionIntentCode} />
+          <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between gap-3 flex-wrap">
+            <div className="flex flex-col gap-1 min-w-[200px]">
+              <div className="font-semibold text-sm">
+                {isSearchMode
+                  ? `ผลการค้นหา (${searchResults?.length ?? 0})`
+                  : selectedSession
+                    ? selectedSession.displayName || selectedSession.userId
+                    : "ไม่มีห้องแชทที่เลือก"}
               </div>
-            )}
+              {!isSearchMode && selectedSession && (
+                <div className="flex items-center gap-2 text-xs text-zinc-400">
+                  <span>
+                    platform: {platformLabel(selectedSession.platform)}
+                  </span>
+                  <IntentBadge code={selectedSessionIntentCode} />
+                </div>
+              )}
+            </div>
+
+            <form
+              onSubmit={handleSearchSubmit}
+              className="flex items-center gap-2 text-xs"
+            >
+              <input
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="ค้นหาข้อความ..."
+                className="bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-1 text-xs text-zinc-100 w-56"
+              />
+              <button
+                type="submit"
+                disabled={searching}
+                className="px-3 py-1 rounded-lg bg-emerald-600 text-white text-xs disabled:opacity-60"
+              >
+                {searching ? "ค้นหา..." : "ค้นหา"}
+              </button>
+              {isSearchMode && (
+                <button
+                  type="button"
+                  onClick={() => void handleClearSearch()}
+                  className="px-3 py-1 rounded-lg bg-zinc-800 text-zinc-200 text-xs"
+                >
+                  ล้างคำค้น
+                </button>
+              )}
+            </form>
           </div>
 
           {error && (
@@ -726,21 +808,29 @@ const ChatCenter: React.FC = () => {
             ref={messagesRef}
             className="flex-1 overflow-y-auto px-4 py-3 space-y-2 text-sm min-h-0"
           >
-            {loadingMessages && (
+            {loadingMessages && !searchResults && (
               <div className="text-zinc-400 text-xs">
                 กำลังโหลดข้อความ...
               </div>
             )}
 
-            {!loadingMessages && messages.length === 0 && selectedSession && (
+            {!loadingMessages && !searchResults &&
+              messages.length === 0 &&
+              selectedSession && (
               <div className="text-zinc-400 text-xs">
                 ยังไม่มีข้อความในห้องนี้
               </div>
             )}
 
-            {!selectedSession && (
+            {!selectedSession && !searchResults && (
               <div className="text-zinc-500 text-xs">
                 กรุณาเลือกลูกค้าจากด้านซ้ายเพื่อดูประวัติแชท
+              </div>
+            )}
+
+            {searchResults && searchResults.length === 0 && (
+              <div className="text-zinc-400 text-xs">
+                ไม่พบข้อความที่ตรงกับคำค้นหา
               </div>
             )}
 
@@ -815,8 +905,14 @@ const ChatCenter: React.FC = () => {
               const msgIntentCode = getMessageIntentCode(m);
               const msgIntentLabel = intentCodeToLabel(msgIntentCode);
               const messagePlatform = platformLabel(
-                m.platform || selectedSession?.platform
+                m.platform || m.session?.platform || selectedSession?.platform
               );
+              const sessionLabel = isSearchMode
+                ? m.session?.displayName ||
+                  m.session?.userId ||
+                  m.session?.id ||
+                  ""
+                : null;
 
               return (
                 <React.Fragment key={m.id}>
@@ -828,9 +924,15 @@ const ChatCenter: React.FC = () => {
                     </div>
                   )}
                   <div className={`flex ${align} gap-2 items-end text-sm`}>
-                    <div
-                      className={`max-w-[70%] px-3 py-2 rounded-2xl ${bubble} whitespace-pre-line`}
-                    >
+                    <div className={`max-w-[70%] flex flex-col gap-1`}>
+                      {sessionLabel && (
+                        <div className="text-[11px] text-zinc-400">
+                          {sessionLabel} {messagePlatform ? `(${messagePlatform})` : ""}
+                        </div>
+                      )}
+                      <div
+                        className={`px-3 py-2 rounded-2xl ${bubble} whitespace-pre-line`}
+                      >
                       {content}
                       {/* แสดง intent เฉพาะข้อความฝั่ง user และถ้ามี label */}
                       {m.senderType === "user" && msgIntentLabel && (
@@ -847,6 +949,7 @@ const ChatCenter: React.FC = () => {
                         <span className="ml-auto text-right">
                           {new Date(m.createdAt).toLocaleTimeString()}
                         </span>
+                      </div>
                       </div>
                     </div>
                   </div>

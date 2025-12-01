@@ -156,6 +156,13 @@ export type ChatMessage = {
 
   createdAt: string;
   updatedAt?: string;
+  session?: {
+    id: string;
+    platform?: string | null;
+    userId?: string | null;
+    displayName?: string | null;
+    botId?: string | null;
+  };
 };
 
 /* ---- Knowledge types ---- */
@@ -668,6 +675,29 @@ export async function replyChatSession(
   );
 
   return res.data;
+}
+
+export async function searchChatMessages(params: {
+  q: string;
+  botId?: string | null;
+  platform?: string;
+  userId?: string;
+  limit?: number;
+}): Promise<ChatMessage[]> {
+  const res = await API.get<{ ok: boolean; items: ChatMessage[] }>(
+    "/admin/chat/search",
+    {
+      params: {
+        q: params.q,
+        botId: params.botId || undefined,
+        platform: params.platform,
+        userId: params.userId,
+        limit: params.limit,
+      },
+    }
+  );
+  const data = res.data as any;
+  return data.items ?? [];
 }
 
 /* ============================== Knowledge APIs ============================== */

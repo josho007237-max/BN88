@@ -29,6 +29,14 @@ const replyPayloadSchema = z.object({
   attachmentMeta: z.any().optional(),
 });
 
+const searchQuerySchema = z.object({
+  q: z.string().min(1),
+  limit: z.coerce.number().int().positive().max(500).optional(),
+  platform: z.string().optional(),
+  botId: z.string().optional(),
+  userId: z.string().optional(),
+});
+
 /* ------------------------------------------------------------------ */
 /* Helpers                                                            */
 /* ------------------------------------------------------------------ */
@@ -219,34 +227,90 @@ router.get(
   "/sessions",
   requirePermission(["manageCampaigns", "viewReports"]),
   async (req: Request, res: Response) => {
-  try {
-    const tenant = getTenant(req);
-    const botId =
-      typeof req.query.botId === "string" ? req.query.botId : undefined;
-    const platform =
-      typeof req.query.platform === "string"
-        ? (req.query.platform as string)
-        : undefined;
-    const limit = Number(req.query.limit) || 50;
+    try {
+      const tenant = getTenant(req);
+      const botId =
+        typeof req.query.botId === "string" ? req.query.botId : undefined;
+      const platform =
+        typeof req.query.platform === "string"
+          ? (req.query.platform as string)
+          : undefined;
+      const limit = Number(req.query.limit) || 50;
 
-    const sessions = await prisma.chatSession.findMany({
-      where: {
-        tenant,
-        ...(botId ? { botId } : {}),
-        ...(platform ? { platform } : {}),
-      },
-      orderBy: { lastMessageAt: "desc" },
-      take: limit,
-    });
+      const sessions = await prisma.chatSession.findMany({
+        where: {
+          tenant,
+          ...(botId ? { botId } : {}),
+          ...(platform ? { platform } : {}),
+        },
+        orderBy: { lastMessageAt: "desc" },
+        take: limit,
+      });
 
-    return res.json({ ok: true, sessions, items: sessions });
-  } catch (err) {
-    console.error("[admin chat] list sessions error", err);
-    return res
-      .status(500)
-      .json({ ok: false, message: "internal_error_list_sessions" });
+      return res.json({ ok: true, sessions, items: sessions });
+    } catch (err) {
+      console.error("[admin chat] list sessions error", err);
+      return res
+        .status(500)
+        .json({ ok: false, message: "internal_error_list_sessions" });
+    }
   }
-});
+);
+
+/* ------------------------------------------------------------------ */
+/* GET /api/admin/chat/search                                         */
+/* ------------------------------------------------------------------ */
+
+router.get(
+  "/search",
+  requirePermission(["manageCampaigns", "viewReports"]),
+  async (req: Request, res: Response): Promise<Response> => {
+    const requestId = getRequestId(req);
+    const log = createRequestLogger(requestId);
+    try {
+      const tenant = getTenant(req);
+      const parsed = searchQuerySchema.safeParse(req.query ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ ok: false, message: "invalid_query" });
+      }
+
+      const { q, limit = 100, platform, botId, userId } = parsed.data;
+
+      const messages = await prisma.chatMessage.findMany({
+        where: {
+          tenant,
+          ...(platform ? { platform } : {}),
+          ...(botId ? { botId } : {}),
+          ...(userId ? { session: { userId } } : {}),
+          OR: [
+            { text: { contains: q, mode: "insensitive" } },
+            { attachmentMeta: { path: ["fileName"], string_contains: q } as any },
+            { attachmentMeta: { path: ["mimeType"], string_contains: q } as any },
+          ],
+        },
+        include: {
+          session: {
+            select: {
+              id: true,
+              platform: true,
+              userId: true,
+              displayName: true,
+              botId: true,
+            },
+          },
+        },
+        orderBy: { createdAt: "desc" },
+        take: limit,
+      });
+
+      log.info({ requestId, q, limit, count: messages.length }, "chat_search_ok");
+      return res.json({ ok: true, items: messages });
+    } catch (err: any) {
+      log.error({ err, requestId }, "chat_search_error");
+      return res.status(500).json({ ok: false, message: "internal_error_search" });
+    }
+  }
+);
 
 /* ------------------------------------------------------------------ */
 /* GET /api/admin/chat/sessions/:id/messages                          */
