@@ -95,6 +95,7 @@ export type RecentCasesResponse = { items: RecentCase[] };
 export type BotSecretsPayload = {
   // --- OpenAI ---
   openaiApiKey?: string;
+  openAiApiKey?: string;          // alias casing (maps to openaiApiKey)
 
   // legacy aliases (รองรับโค้ดเดิม)
   openaiKey?: string;               // -> normalize เป็น openaiApiKey
@@ -114,3 +115,16 @@ export type BotSecretsPayload = {
 
 // เมื่อดึงมาโชว์ในฟอร์ม (เป็น partial ได้ทั้งหมด และอาจเป็น masked string เช่น "****abcd")
 export type BotSecretsMasked = Partial<BotSecretsPayload>;
+
+export type BotSecretsSavedFlags = {
+  openaiApiKey: boolean;
+  lineAccessToken: boolean;
+  lineChannelSecret: boolean;
+};
+
+export type BotSecretsSaveResponse = ApiOK & {
+  botId: string;
+  saved: BotSecretsSavedFlags;
+};
+
+export type BotSecretsResponse = ApiOK & BotSecretsMasked;

@@ -21,6 +21,8 @@ import { config } from "./config";
 import { logger } from "./mw/logger";
 import { authGuard } from "./mw/auth";
 import { sseHandler } from "./live";
+import { metricsSseHandler, metricsStreamHandler } from "./routes/metrics.live";
+import { events } from "./routes/events";
 
 /* Core routes */
 import health from "./routes/health";
@@ -43,6 +45,10 @@ import presetsAdmin from "./routes/admin/ai/presets";
 import knowledgeAdmin from "./routes/admin/ai/knowledge";
 import adminPersonaRoutes from "./routes/admin/personas";
 import { chatAdminRouter } from "./routes/admin/chat";
+import lepAdminRouter from "./routes/admin/lep";
+import adminRolesRouter from "./routes/admin/roles";
+import { startCampaignScheduleWorker } from "./queues/campaign.queue";
+import { startMessageWorker } from "./queues/message.queue";
 
 /* Dev & tools */
 import devRoutes from "./routes/dev";
@@ -51,6 +57,9 @@ import aiAnswerRoute from "./routes/ai/answer";
 
 const app = express();
 app.set("trust proxy", 1);
+
+startCampaignScheduleWorker();
+startMessageWorker();
 
 /* ---------- Body parsers ---------- */
 
@@ -126,6 +135,7 @@ const limiter = rateLimit({
     req.path.startsWith("/webhooks/") ||
     req.path === "/health" ||
     req.path.startsWith("/live/") ||
+    req.path.startsWith("/events") ||
     req.path.startsWith("/admin/chat"),
 });
 
@@ -147,6 +157,7 @@ app.get("/api/health", (_req, res) =>
 
 app.use("/api", devRoutes);
 app.use("/api", lineTools);
+app.use("/api", events);
 
 /* Core */
 
@@ -160,6 +171,8 @@ app.use("/api/ai/answer", aiAnswerRoute);
 /* Realtime */
 
 app.get("/api/live/:tenant", sseHandler);
+app.get("/api/live/metrics", metricsSseHandler);
+app.get("/metrics/stream", metricsStreamHandler);
 
 /* Webhooks */
 
@@ -175,6 +188,8 @@ if (config.ENABLE_ADMIN_API === "1") {
   app.use("/api/admin/bots", authGuard, adminBotsRouter);
   app.use("/api/admin/bots", authGuard, adminBotIntentsRouter);
   app.use("/api/admin/chat", authGuard, chatAdminRouter);
+  app.use("/api/admin/lep", authGuard, lepAdminRouter);
+  app.use("/api/admin/roles", authGuard, adminRolesRouter);
 
   app.use("/api/admin", authGuard, adminRouter);
   app.use("/api/admin/ai/presets", authGuard, presetsAdmin);
