@@ -30,6 +30,10 @@ const EnvSchema = z.object({
 
   // LINE Engagement Platform (LEP)
   LEP_BASE_URL: z.string().default("http://localhost:8080"),
+
+  // Messaging / rate limit
+  REDIS_URL: z.string().default("redis://127.0.0.1:6379"),
+  MESSAGE_RATE_LIMIT_PER_MIN: z.coerce.number().int().positive().default(60),
 });
 
 const parsed = EnvSchema.safeParse(process.env);
@@ -68,6 +72,10 @@ export const config = {
   LINE_DEV_SKIP_VERIFY: env.LINE_DEV_SKIP_VERIFY,
 
   LEP_BASE_URL: env.LEP_BASE_URL,
+
+  // Messaging / rate limit
+  REDIS_URL: env.REDIS_URL,
+  MESSAGE_RATE_LIMIT_PER_MIN: env.MESSAGE_RATE_LIMIT_PER_MIN,
 
   isProd: env.NODE_ENV === "production",
   isDev: env.NODE_ENV === "development",

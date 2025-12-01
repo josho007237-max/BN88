@@ -6,7 +6,10 @@ import { sseHub } from "../../lib/sseHub";
 import { MessageType } from "@prisma/client";
 import { sendTelegramMessage } from "../telegram";
 import { createRequestLogger } from "../../utils/logger";
-import { enqueueFollowUpJob } from "../../queues/message.queue";
+import {
+  enqueueFollowUpJob,
+  enqueueRateLimitedSend,
+} from "../../queues/message.queue";
 
 export type SupportedPlatform = "line" | "telegram" | "facebook";
 
@@ -326,18 +329,39 @@ async function executeSendAction(
       message: botChatMessage,
     });
 
-    let delivered = false;
-    if (platform === "line") {
-      delivered = await sendLinePushMessage({
-        channelAccessToken: bot.secret?.channelAccessToken,
-        to: userId,
-        payload: normalized,
-      });
-    } else if (platform === "telegram") {
-      delivered = await sendTelegramPayload({
-        botToken: bot.secret?.telegramBotToken,
-        chatId: userId,
-        payload: normalized,
+    const rateLimited = await enqueueRateLimitedSend({
+      id: `${botChatMessage.id}:send`,
+      channelId: `${platform}:${bot.id}`,
+      requestId: ctx.requestId,
+      handler: async () => {
+        if (platform === "line") {
+          return sendLinePushMessage({
+            channelAccessToken: bot.secret?.channelAccessToken,
+            to: userId,
+            payload: normalized,
+          });
+        }
+        if (platform === "telegram") {
+          return sendTelegramPayload({
+            botToken: bot.secret?.telegramBotToken,
+            chatId: userId,
+            payload: normalized,
+          });
+        }
+        return false;
+      },
+    });
+
+    const delivered = rateLimited.scheduled
+      ? false
+      : Boolean(rateLimited.result);
+
+    if (rateLimited.scheduled) {
+      log.warn("[action] send_message rate-limited", {
+        sessionId: session.id,
+        platform,
+        requestId: ctx.requestId,
+        delayMs: rateLimited.delayMs,
       });
     }
 
