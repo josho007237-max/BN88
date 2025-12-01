@@ -47,6 +47,8 @@ import adminPersonaRoutes from "./routes/admin/personas";
 import { chatAdminRouter } from "./routes/admin/chat";
 import lepAdminRouter from "./routes/admin/lep";
 import adminRolesRouter from "./routes/admin/roles";
+import { startCampaignScheduleWorker } from "./queues/campaign.queue";
+import { startMessageWorker } from "./queues/message.queue";
 
 /* Dev & tools */
 import devRoutes from "./routes/dev";
@@ -55,6 +57,9 @@ import aiAnswerRoute from "./routes/ai/answer";
 
 const app = express();
 app.set("trust proxy", 1);
+
+startCampaignScheduleWorker();
+startMessageWorker();
 
 /* ---------- Body parsers ---------- */
 

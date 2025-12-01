@@ -350,3 +350,27 @@ enum MessageType {
   STICKER
   SYSTEM
 }
+
+model CampaignSchedule {
+  id             String   @id @default(cuid())
+  campaignId     String
+  cronExpr       String
+  timezone       String
+  status         CampaignScheduleStatus @default(ACTIVE)
+  startAt        DateTime?
+  endAt          DateTime?
+  idempotencyKey String? @unique
+  lastRunAt      DateTime?
+  nextRunAt      DateTime?
+  meta           Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([campaignId], map: "CampaignSchedule_campaignId")
+}
+
+enum CampaignScheduleStatus {
+  ACTIVE
+  PAUSED
+  DISABLED
+}

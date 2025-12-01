@@ -2,17 +2,21 @@ import { Router } from "express";
 import { z } from "zod";
 import {
   createCampaign,
-  createCampaignSchedule,
-  deleteCampaignSchedule,
   getCampaign,
   getCampaignStatus,
   getLepHealth,
-  listCampaignSchedules,
   listCampaigns,
   queueCampaign,
-  updateCampaignSchedule,
   LepClientError,
 } from "../../services/lepClient";
+import {
+  listSchedules,
+  createSchedule,
+  updateSchedule,
+  deleteSchedule,
+} from "../../services/campaignSchedule";
+import { getRequestId } from "../../utils/logger";
+import { config } from "../../config";
 
 const router = Router();
 
@@ -22,6 +26,19 @@ const buildSuccess = (result: { lepBaseUrl: string; status: number; data: any })
   lepBaseUrl: result.lepBaseUrl,
   status: result.status,
   data: result.data,
+});
+
+const mapSchedule = (s: any) => ({
+  id: s.id,
+  campaignId: s.campaignId,
+  cron: s.cronExpr,
+  timezone: s.timezone,
+  startAt: s.startAt,
+  endAt: s.endAt,
+  status: s.status,
+  idempotencyKey: s.idempotencyKey,
+  createdAt: s.createdAt,
+  updatedAt: s.updatedAt,
 });
 
 const handleLepError = (err: any, res: any) => {
@@ -108,8 +125,15 @@ router.get("/campaigns/:id/status", async (req, res) => {
 
 router.get("/campaigns/:id/schedules", async (req, res) => {
   try {
-    const result = await listCampaignSchedules(req.params.id);
-    return res.json(buildSuccess(result));
+    const schedules = await listSchedules(req.params.id);
+    const mapped = schedules.map(mapSchedule);
+    return res.json(
+      buildSuccess({
+        lepBaseUrl: config.LEP_BASE_URL,
+        status: 200,
+        data: { campaignId: req.params.id, schedules: mapped },
+      }),
+    );
   } catch (err: any) {
     return handleLepError(err, res);
   }
@@ -122,8 +146,11 @@ router.post("/campaigns/:id/schedules", async (req, res) => {
   }
 
   try {
-    const result = await createCampaignSchedule(req.params.id, parsed.data);
-    return res.json(buildSuccess(result));
+    const requestId = getRequestId(req);
+    const schedule = await createSchedule(req.params.id, { ...parsed.data, requestId });
+    return res.json(
+      buildSuccess({ lepBaseUrl: config.LEP_BASE_URL, status: 200, data: { schedule: mapSchedule(schedule), campaignId: req.params.id } })
+    );
   } catch (err: any) {
     return handleLepError(err, res);
   }
@@ -136,8 +163,11 @@ router.patch("/campaigns/:id/schedules/:scheduleId", async (req, res) => {
   }
 
   try {
-    const result = await updateCampaignSchedule(req.params.id, req.params.scheduleId, parsed.data);
-    return res.json(buildSuccess(result));
+    const requestId = getRequestId(req);
+    const schedule = await updateSchedule(req.params.id, req.params.scheduleId, parsed.data, requestId);
+    return res.json(
+      buildSuccess({ lepBaseUrl: config.LEP_BASE_URL, status: 200, data: { schedule: mapSchedule(schedule), campaignId: req.params.id } })
+    );
   } catch (err: any) {
     return handleLepError(err, res);
   }
@@ -145,8 +175,11 @@ router.patch("/campaigns/:id/schedules/:scheduleId", async (req, res) => {
 
 router.delete("/campaigns/:id/schedules/:scheduleId", async (req, res) => {
   try {
-    const result = await deleteCampaignSchedule(req.params.id, req.params.scheduleId);
-    return res.json(buildSuccess(result));
+    const requestId = getRequestId(req);
+    await deleteSchedule(req.params.id, req.params.scheduleId, requestId);
+    return res.json(
+      buildSuccess({ lepBaseUrl: config.LEP_BASE_URL, status: 200, data: { scheduleId: req.params.scheduleId } })
+    );
   } catch (err: any) {
     return handleLepError(err, res);
   }

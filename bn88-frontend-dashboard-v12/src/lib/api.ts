@@ -250,6 +250,7 @@ export type LepCampaignSchedule = {
   enabled?: boolean;
   repeatJobKey?: string | null;
   idempotencyKey?: string | null;
+  status?: string;
   createdAt?: string;
   updatedAt?: string;
 };

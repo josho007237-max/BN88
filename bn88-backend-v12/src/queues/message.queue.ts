@@ -1,6 +1,7 @@
 // src/queues/message.queue.ts
 // Lightweight in-memory follow-up scheduler + rate-limited send helper
 
+import { Queue, Worker, JobsOptions } from "bullmq";
 import { config } from "../config";
 import { createRequestLogger } from "../utils/logger";
 
@@ -171,6 +172,59 @@ type RateLimitedJob = {
 
 const rateLimitTimers = new Map<string, NodeJS.Timeout>();
 
+// -----------------------------
+// BullMQ queue for scheduled sends
+// -----------------------------
+type ScheduledMessageJob = RateLimitedJob & {
+  cron?: string;
+  timezone?: string;
+  delayMs?: number;
+  handlerKey: string;
+};
+
+const messageQueue = new Queue<ScheduledMessageJob>("message-dispatch", {
+  connection: { url: config.REDIS_URL },
+});
+
+const handlerRegistry = new Map<string, () => Promise<any>>();
+
+let messageWorkerStarted = false;
+
+export function startMessageWorker() {
+  if (messageWorkerStarted) return;
+  messageWorkerStarted = true;
+
+  const worker = new Worker(
+    "message-dispatch",
+    async (job) => {
+      const log = createRequestLogger(job.data.requestId || job.id);
+      log.info("[message.queue] firing job", { id: job.id, channelId: job.data.channelId });
+      const check = await consumeRateLimit(job.data.channelId, job.data.requestId);
+      if (!check.allowed) {
+        log.warn("[message.queue] rate-limit hit, rescheduling", {
+          delayMs: check.delayMs,
+          channelId: job.data.channelId,
+        });
+        await job.updateData(job.data);
+        await job.moveToDelayed(Date.now() + (check.delayMs || 1000));
+        return;
+      }
+      const handler = handlerRegistry.get(job.data.handlerKey);
+      if (handler) {
+        await handler();
+      } else {
+        log.warn("[message.queue] handler missing", { handlerKey: job.data.handlerKey });
+      }
+    },
+    { connection: { url: config.REDIS_URL } },
+  );
+
+  worker.on("failed", (job, err) => {
+    const log = createRequestLogger(job?.data?.requestId || job?.id);
+    log.error("[message.queue] worker failed", err);
+  });
+}
+
 async function consumeRateLimit(channelId: string, requestId?: string) {
   const log = createRequestLogger(requestId);
   try {
@@ -242,4 +296,39 @@ export async function enqueueRateLimitedSend(job: RateLimitedJob): Promise<{
   };
 
   return run();
+}
+
+export async function scheduleMessageJob(options: {
+  id: string;
+  channelId: string;
+  handler: () => Promise<any>;
+  cron?: string;
+  timezone?: string;
+  delayMs?: number;
+  requestId?: string;
+}) {
+  const log = createRequestLogger(options.requestId);
+  handlerRegistry.set(options.id, options.handler);
+  const repeat: JobsOptions["repeat"] | undefined = options.cron
+    ? { cron: options.cron, tz: options.timezone }
+    : undefined;
+
+  await messageQueue.add(
+    "message.scheduled",
+    { ...options, handlerKey: options.id },
+    {
+      jobId: options.id,
+      repeat,
+      delay: options.delayMs,
+      removeOnComplete: true,
+      removeOnFail: true,
+    },
+  );
+
+  log.info("[message.queue] scheduled", {
+    id: options.id,
+    cron: options.cron,
+    timezone: options.timezone,
+    delayMs: options.delayMs,
+  });
 }

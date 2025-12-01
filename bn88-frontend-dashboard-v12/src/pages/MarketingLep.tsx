@@ -45,6 +45,28 @@ export default function MarketingLep() {
   const [endAt, setEndAt] = useState("");
   const [scheduleBusy, setScheduleBusy] = useState(false);
 
+  const calendar = useMemo(() => {
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const days = Array.from({ length: 7 }).map((_, idx) => {
+      const d = new Date(start);
+      d.setDate(start.getDate() + idx);
+      return d;
+    });
+
+    return days.map((day) => {
+      const dateKey = day.toISOString().slice(0, 10);
+      const items = schedules.filter((s) => {
+        if (s.startAt) {
+          return s.startAt.slice(0, 10) === dateKey;
+        }
+        return false;
+      });
+      const recurring = schedules.filter((s) => !s.startAt);
+      return { date: day, items, recurring };
+    });
+  }, [schedules]);
+
   const lepBase = useMemo(() => healthData?.lepBaseUrl ?? "", [healthData]);
 
   useEffect(() => {
@@ -435,41 +457,71 @@ export default function MarketingLep() {
             <h2 className="text-lg font-semibold">Calendar / Schedules</h2>
             <span className="text-xs text-neutral-500">{schedules.length} items</span>
           </div>
-          <div className="overflow-auto max-h-80 text-sm">
+          <div className="overflow-auto max-h-80 text-sm space-y-3">
             {schedules.length === 0 ? (
               <div className="text-neutral-500 text-sm">ยังไม่มี schedule</div>
             ) : (
-              <table className="min-w-full text-sm">
-                <thead className="text-neutral-400 text-xs uppercase">
-                  <tr className="border-b border-neutral-800/60">
-                    <th className="px-2 py-2 text-left">Cron</th>
-                    <th className="px-2 py-2 text-left">TZ</th>
-                    <th className="px-2 py-2 text-left">Start/End</th>
-                    <th className="px-2 py-2 text-left">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {schedules.map((s) => (
-                    <tr key={s.id} className="border-b border-neutral-800/60">
-                      <td className="px-2 py-2 font-mono text-xs">{s.cron}</td>
-                      <td className="px-2 py-2 text-xs">{s.timezone}</td>
-                      <td className="px-2 py-2 text-xs text-neutral-400">
-                        <div>{s.startAt ? new Date(s.startAt).toLocaleString() : "-"}</div>
-                        <div>{s.endAt ? new Date(s.endAt).toLocaleString() : "-"}</div>
-                      </td>
-                      <td className="px-2 py-2 text-xs space-x-2">
-                        <button
-                          onClick={() => handleDeleteSchedule(s.id)}
-                          className="px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700"
-                          disabled={scheduleBusy}
-                        >
-                          Delete
-                        </button>
-                      </td>
-                    </tr>
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {calendar.map((day) => (
+                    <div key={day.date.toISOString()} className="border border-neutral-800 rounded-lg p-3 bg-black/20">
+                      <div className="flex items-center justify-between text-xs text-neutral-400 mb-2">
+                        <span>{day.date.toLocaleDateString()}</span>
+                        <span>{day.items.length} on-day</span>
+                      </div>
+                      <div className="space-y-1">
+                        {day.items.map((s) => (
+                          <div key={s.id} className="text-xs bg-neutral-800/60 rounded px-2 py-1">
+                            <div className="font-mono text-[11px]">{s.cron}</div>
+                            <div className="text-neutral-400">
+                              {s.startAt ? new Date(s.startAt).toLocaleTimeString() : "-"}
+                            </div>
+                          </div>
+                        ))}
+                        {day.items.length === 0 && (
+                          <div className="text-neutral-600 text-xs">ไม่มีรายการในวันนี้</div>
+                        )}
+                        {day.recurring.length > 0 && (
+                          <div className="text-[11px] text-neutral-400">Recurring: {day.recurring.length}</div>
+                        )}
+                      </div>
+                    </div>
                   ))}
-                </tbody>
-              </table>
+                </div>
+                <div className="border border-neutral-800 rounded-lg">
+                  <table className="min-w-full text-sm">
+                    <thead className="text-neutral-400 text-xs uppercase">
+                      <tr className="border-b border-neutral-800/60">
+                        <th className="px-2 py-2 text-left">Cron</th>
+                        <th className="px-2 py-2 text-left">TZ</th>
+                        <th className="px-2 py-2 text-left">Start/End</th>
+                        <th className="px-2 py-2 text-left">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {schedules.map((s) => (
+                        <tr key={s.id} className="border-b border-neutral-800/60">
+                          <td className="px-2 py-2 font-mono text-xs">{s.cron}</td>
+                          <td className="px-2 py-2 text-xs">{s.timezone}</td>
+                          <td className="px-2 py-2 text-xs text-neutral-400">
+                            <div>{s.startAt ? new Date(s.startAt).toLocaleString() : "-"}</div>
+                            <div>{s.endAt ? new Date(s.endAt).toLocaleString() : "-"}</div>
+                          </td>
+                          <td className="px-2 py-2 text-xs space-x-2">
+                            <button
+                              onClick={() => handleDeleteSchedule(s.id)}
+                              className="px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700"
+                              disabled={scheduleBusy}
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
             )}
           </div>
         </div>
