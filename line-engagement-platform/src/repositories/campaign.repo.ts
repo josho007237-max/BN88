@@ -83,4 +83,54 @@ export const CampaignRepo = {
         failedCount: { increment: failedDelta },
       },
     }),
+
+  listSchedules: async (campaignId: string) =>
+    prisma.campaignSchedule.findMany({
+      where: { campaignId },
+      orderBy: { createdAt: 'desc' },
+    }),
+
+  createSchedule: async (data: {
+    campaignId: string;
+    cron: string;
+    timezone: string;
+    startAt?: Date;
+    endAt?: Date;
+    idempotencyKey?: string;
+    repeatJobKey?: string | null;
+  }) =>
+    prisma.campaignSchedule.create({
+      data: {
+        campaignId: data.campaignId,
+        cron: data.cron,
+        timezone: data.timezone,
+        startAt: data.startAt,
+        endAt: data.endAt,
+        idempotencyKey: data.idempotencyKey,
+        repeatJobKey: data.repeatJobKey ?? undefined,
+      },
+    }),
+
+  updateSchedule: async (
+    scheduleId: string,
+    data: Partial<{
+      cron: string;
+      timezone: string;
+      startAt?: Date | null;
+      endAt?: Date | null;
+      enabled?: boolean;
+      repeatJobKey?: string | null;
+      idempotencyKey?: string | null;
+    }>,
+  ) =>
+    prisma.campaignSchedule.update({
+      where: { id: scheduleId },
+      data,
+    }),
+
+  deleteSchedule: async (scheduleId: string) =>
+    prisma.campaignSchedule.delete({ where: { id: scheduleId } }),
+
+  getSchedule: async (scheduleId: string) =>
+    prisma.campaignSchedule.findUnique({ where: { id: scheduleId } }),
 };

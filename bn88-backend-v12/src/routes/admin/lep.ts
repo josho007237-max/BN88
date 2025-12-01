@@ -2,11 +2,15 @@ import { Router } from "express";
 import { z } from "zod";
 import {
   createCampaign,
+  createCampaignSchedule,
+  deleteCampaignSchedule,
   getCampaign,
   getCampaignStatus,
   getLepHealth,
+  listCampaignSchedules,
   listCampaigns,
   queueCampaign,
+  updateCampaignSchedule,
   LepClientError,
 } from "../../services/lepClient";
 
@@ -53,6 +57,14 @@ const createCampaignSchema = z.object({
   targets: z.any().optional(),
 });
 
+const scheduleSchema = z.object({
+  cron: z.string().min(1),
+  timezone: z.string().min(1),
+  startAt: z.string().optional(),
+  endAt: z.string().optional(),
+  idempotencyKey: z.string().optional(),
+});
+
 router.post("/campaigns", async (req, res) => {
   const parsed = createCampaignSchema.safeParse(req.body);
   if (!parsed.success) {
@@ -88,6 +100,52 @@ router.get("/campaigns/:id", async (req, res) => {
 router.get("/campaigns/:id/status", async (req, res) => {
   try {
     const result = await getCampaignStatus(req.params.id);
+    return res.json(buildSuccess(result));
+  } catch (err: any) {
+    return handleLepError(err, res);
+  }
+});
+
+router.get("/campaigns/:id/schedules", async (req, res) => {
+  try {
+    const result = await listCampaignSchedules(req.params.id);
+    return res.json(buildSuccess(result));
+  } catch (err: any) {
+    return handleLepError(err, res);
+  }
+});
+
+router.post("/campaigns/:id/schedules", async (req, res) => {
+  const parsed = scheduleSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ ok: false, message: "invalid_input", issues: parsed.error.issues });
+  }
+
+  try {
+    const result = await createCampaignSchedule(req.params.id, parsed.data);
+    return res.json(buildSuccess(result));
+  } catch (err: any) {
+    return handleLepError(err, res);
+  }
+});
+
+router.patch("/campaigns/:id/schedules/:scheduleId", async (req, res) => {
+  const parsed = scheduleSchema.partial().safeParse(req.body);
+  if (!parsed.success) {
+    return res.status(400).json({ ok: false, message: "invalid_input", issues: parsed.error.issues });
+  }
+
+  try {
+    const result = await updateCampaignSchedule(req.params.id, req.params.scheduleId, parsed.data);
+    return res.json(buildSuccess(result));
+  } catch (err: any) {
+    return handleLepError(err, res);
+  }
+});
+
+router.delete("/campaigns/:id/schedules/:scheduleId", async (req, res) => {
+  try {
+    const result = await deleteCampaignSchedule(req.params.id, req.params.scheduleId);
     return res.json(buildSuccess(result));
   } catch (err: any) {
     return handleLepError(err, res);

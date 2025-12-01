@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import toast from "react-hot-toast";
 import {
   LepCampaign,
@@ -10,6 +10,10 @@ import {
   lepHealth,
   lepListCampaigns,
   lepQueueCampaign,
+  LepCampaignSchedule,
+  lepListCampaignSchedules,
+  lepCreateCampaignSchedule,
+  lepDeleteCampaignSchedule,
 } from "../lib/api";
 
 const cardClass = "bg-neutral-900 border border-neutral-800 rounded-xl p-4";
@@ -26,11 +30,20 @@ export default function MarketingLep() {
   const [detailJson, setDetailJson] = useState<string | null>(null);
   const [statusJson, setStatusJson] = useState<string | null>(null);
   const [workingId, setWorkingId] = useState<string | null>(null);
+  const [selectedCampaignId, setSelectedCampaignId] = useState<string | null>(null);
+  const [schedules, setSchedules] = useState<LepCampaignSchedule[]>([]);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
 
   const [name, setName] = useState("");
   const [message, setMessage] = useState("");
   const [targets, setTargets] = useState("");
   const [creating, setCreating] = useState(false);
+
+  const [cronExpr, setCronExpr] = useState("0 9 * * *");
+  const [timezone, setTimezone] = useState("Asia/Bangkok");
+  const [startAt, setStartAt] = useState("");
+  const [endAt, setEndAt] = useState("");
+  const [scheduleBusy, setScheduleBusy] = useState(false);
 
   const lepBase = useMemo(() => healthData?.lepBaseUrl ?? "", [healthData]);
 
@@ -57,6 +70,21 @@ export default function MarketingLep() {
     }
   };
 
+  const loadSchedules = async (campaignId: string) => {
+    setScheduleLoading(true);
+    try {
+      const res = await lepListCampaignSchedules(campaignId);
+      const items = (res.data as any)?.schedules ?? [];
+      setSchedules(items as LepCampaignSchedule[]);
+      setSelectedCampaignId(campaignId);
+    } catch (err) {
+      console.error(err);
+      toast.error("โหลดตารางเวลาไม่สำเร็จ");
+    } finally {
+      setScheduleLoading(false);
+    }
+  };
+
   const handleHealthCheck = async () => {
     setHealthLoading(true);
     try {
@@ -71,7 +99,7 @@ export default function MarketingLep() {
     }
   };
 
-  const handleCreate = async (e: React.FormEvent) => {
+  const handleCreate = async (e: FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !message.trim()) {
       toast.error("กรอกชื่อและข้อความก่อน");
@@ -110,6 +138,7 @@ export default function MarketingLep() {
     try {
       const res = await lepGetCampaign(id);
       setDetailJson(JSON.stringify(res.data, null, 2));
+      await loadSchedules(id);
     } catch (err: any) {
       console.error(err);
       toast.error("ดึงข้อมูลแคมเปญไม่สำเร็จ");
@@ -142,6 +171,50 @@ export default function MarketingLep() {
       toast.error("คิวแคมเปญไม่สำเร็จ");
     } finally {
       setWorkingId(null);
+    }
+  };
+
+  const handleCreateSchedule = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!selectedCampaignId) {
+      toast.error("เลือกแคมเปญจากตารางก่อน");
+      return;
+    }
+    if (!cronExpr.trim() || !timezone.trim()) {
+      toast.error("กรอก cron และ timezone");
+      return;
+    }
+
+    setScheduleBusy(true);
+    try {
+      await lepCreateCampaignSchedule(selectedCampaignId, {
+        cron: cronExpr.trim(),
+        timezone: timezone.trim(),
+        startAt: startAt || undefined,
+        endAt: endAt || undefined,
+      });
+      toast.success("บันทึกตารางเวลาแล้ว");
+      await loadSchedules(selectedCampaignId);
+    } catch (err) {
+      console.error(err);
+      toast.error("สร้าง schedule ไม่สำเร็จ");
+    } finally {
+      setScheduleBusy(false);
+    }
+  };
+
+  const handleDeleteSchedule = async (scheduleId: string) => {
+    if (!selectedCampaignId) return;
+    setScheduleBusy(true);
+    try {
+      await lepDeleteCampaignSchedule(selectedCampaignId, scheduleId);
+      toast.success("ลบ schedule แล้ว");
+      await loadSchedules(selectedCampaignId);
+    } catch (err) {
+      console.error(err);
+      toast.error("ลบ schedule ไม่สำเร็จ");
+    } finally {
+      setScheduleBusy(false);
     }
   };
 
@@ -282,6 +355,122 @@ export default function MarketingLep() {
             <pre className="bg-black/40 text-xs p-3 rounded border border-neutral-800 overflow-auto max-h-60">
               {statusJson || "เลือกแคมเปญเพื่อดูสถานะ"}
             </pre>
+          </div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className={cardClass}>
+          <div className="flex items-center justify-between mb-2">
+            <div>
+              <h2 className="text-lg font-semibold">Schedule (Calendar)</h2>
+              <p className="text-xs text-neutral-400">
+                เลือกแคมเปญจากตาราง แล้วสร้าง cron schedule (timezone รองรับ)
+              </p>
+            </div>
+            <button
+              onClick={() => selectedCampaignId && loadSchedules(selectedCampaignId)}
+              disabled={!selectedCampaignId || scheduleLoading}
+              className="px-3 py-1.5 rounded bg-neutral-800 hover:bg-neutral-700 text-sm"
+            >
+              {scheduleLoading ? "Loading..." : "Reload"}
+            </button>
+          </div>
+          <form className="space-y-2" onSubmit={handleCreateSchedule}>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <div>
+                <label className="text-sm text-neutral-300">Cron</label>
+                <input
+                  value={cronExpr}
+                  onChange={(e) => setCronExpr(e.target.value)}
+                  className="mt-1 w-full rounded bg-neutral-800 border border-neutral-700 px-3 py-2 font-mono text-sm"
+                  placeholder="0 9 * * *"
+                />
+              </div>
+              <div>
+                <label className="text-sm text-neutral-300">Timezone</label>
+                <input
+                  value={timezone}
+                  onChange={(e) => setTimezone(e.target.value)}
+                  className="mt-1 w-full rounded bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm"
+                  placeholder="Asia/Bangkok"
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+              <div>
+                <label className="text-sm text-neutral-300">Start at (optional)</label>
+                <input
+                  type="datetime-local"
+                  value={startAt}
+                  onChange={(e) => setStartAt(e.target.value)}
+                  className="mt-1 w-full rounded bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm"
+                />
+              </div>
+              <div>
+                <label className="text-sm text-neutral-300">End at (optional)</label>
+                <input
+                  type="datetime-local"
+                  value={endAt}
+                  onChange={(e) => setEndAt(e.target.value)}
+                  className="mt-1 w-full rounded bg-neutral-800 border border-neutral-700 px-3 py-2 text-sm"
+                />
+              </div>
+            </div>
+            <button
+              type="submit"
+              disabled={scheduleBusy || !selectedCampaignId}
+              className="px-3 py-2 rounded bg-indigo-600 hover:bg-indigo-500 text-sm"
+            >
+              {scheduleBusy ? "Saving..." : "Create Schedule"}
+            </button>
+            <div className="text-xs text-neutral-400">
+              Campaign ที่เลือก: {selectedCampaignId || "(เลือกจากตารางด้านล่าง)"}
+            </div>
+          </form>
+        </div>
+
+        <div className={cardClass}>
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-lg font-semibold">Calendar / Schedules</h2>
+            <span className="text-xs text-neutral-500">{schedules.length} items</span>
+          </div>
+          <div className="overflow-auto max-h-80 text-sm">
+            {schedules.length === 0 ? (
+              <div className="text-neutral-500 text-sm">ยังไม่มี schedule</div>
+            ) : (
+              <table className="min-w-full text-sm">
+                <thead className="text-neutral-400 text-xs uppercase">
+                  <tr className="border-b border-neutral-800/60">
+                    <th className="px-2 py-2 text-left">Cron</th>
+                    <th className="px-2 py-2 text-left">TZ</th>
+                    <th className="px-2 py-2 text-left">Start/End</th>
+                    <th className="px-2 py-2 text-left">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {schedules.map((s) => (
+                    <tr key={s.id} className="border-b border-neutral-800/60">
+                      <td className="px-2 py-2 font-mono text-xs">{s.cron}</td>
+                      <td className="px-2 py-2 text-xs">{s.timezone}</td>
+                      <td className="px-2 py-2 text-xs text-neutral-400">
+                        <div>{s.startAt ? new Date(s.startAt).toLocaleString() : "-"}</div>
+                        <div>{s.endAt ? new Date(s.endAt).toLocaleString() : "-"}</div>
+                      </td>
+                      <td className="px-2 py-2 text-xs space-x-2">
+                        <button
+                          onClick={() => handleDeleteSchedule(s.id)}
+                          className="px-2 py-1 rounded bg-neutral-800 hover:bg-neutral-700"
+                          disabled={scheduleBusy}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
           </div>
         </div>
       </div>

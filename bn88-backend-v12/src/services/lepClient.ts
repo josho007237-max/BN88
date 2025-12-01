@@ -89,3 +89,49 @@ export async function getCampaignStatus(id: string) {
     return handleError(err);
   }
 }
+
+export async function listCampaignSchedules(id: string) {
+  try {
+    const res = await client.get(`/campaigns/${encodeURIComponent(id)}/schedules`);
+    return toResult(res);
+  } catch (err: any) {
+    return handleError(err);
+  }
+}
+
+export async function createCampaignSchedule(
+  id: string,
+  payload: { cron: string; timezone: string; startAt?: string; endAt?: string; idempotencyKey?: string },
+) {
+  try {
+    const res = await client.post(`/campaigns/${encodeURIComponent(id)}/schedules`, payload);
+    return toResult(res);
+  } catch (err: any) {
+    return handleError(err);
+  }
+}
+
+export async function updateCampaignSchedule(
+  id: string,
+  scheduleId: string,
+  payload: Partial<{ cron: string; timezone: string; startAt?: string | null; endAt?: string | null; enabled?: boolean; idempotencyKey?: string }>,
+) {
+  try {
+    const res = await client.patch(
+      `/campaigns/${encodeURIComponent(id)}/schedules/${encodeURIComponent(scheduleId)}`,
+      payload,
+    );
+    return toResult(res);
+  } catch (err: any) {
+    return handleError(err);
+  }
+}
+
+export async function deleteCampaignSchedule(id: string, scheduleId: string) {
+  try {
+    const res = await client.delete(`/campaigns/${encodeURIComponent(id)}/schedules/${encodeURIComponent(scheduleId)}`);
+    return toResult(res);
+  } catch (err: any) {
+    return handleError(err);
+  }
+}

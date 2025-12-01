@@ -240,6 +240,20 @@ export type LepCampaignStatus = {
   totalTargets?: number | null;
 };
 
+export type LepCampaignSchedule = {
+  id: string;
+  campaignId: string;
+  cron: string;
+  timezone: string;
+  startAt?: string | null;
+  endAt?: string | null;
+  enabled?: boolean;
+  repeatJobKey?: string | null;
+  idempotencyKey?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
 
 /* ================================ Base ================================ */
 
@@ -779,6 +793,42 @@ export async function lepGetCampaignStatus(id: string) {
     data?: LepCampaignStatus;
   }>(`/admin/lep/campaigns/${encodeURIComponent(id)}/status`);
   return res.data;
+}
+
+export async function lepListCampaignSchedules(campaignId: string) {
+  return (
+    await API.get<{ ok: boolean; data: { campaignId: string; schedules: LepCampaignSchedule[] } }>(
+      `/admin/lep/campaigns/${encodeURIComponent(campaignId)}/schedules`,
+    )
+  ).data;
+}
+
+export async function lepCreateCampaignSchedule(
+  campaignId: string,
+  payload: { cron: string; timezone: string; startAt?: string; endAt?: string; idempotencyKey?: string },
+) {
+  return (
+    await API.post(`/admin/lep/campaigns/${encodeURIComponent(campaignId)}/schedules`, payload)
+  ).data as any;
+}
+
+export async function lepUpdateCampaignSchedule(
+  campaignId: string,
+  scheduleId: string,
+  payload: Partial<{ cron: string; timezone: string; startAt?: string | null; endAt?: string | null; enabled?: boolean; idempotencyKey?: string }>,
+) {
+  return (
+    await API.patch(
+      `/admin/lep/campaigns/${encodeURIComponent(campaignId)}/schedules/${encodeURIComponent(scheduleId)}`,
+      payload,
+    )
+  ).data as any;
+}
+
+export async function lepDeleteCampaignSchedule(campaignId: string, scheduleId: string) {
+  return (
+    await API.delete(`/admin/lep/campaigns/${encodeURIComponent(campaignId)}/schedules/${encodeURIComponent(scheduleId)}`)
+  ).data as any;
 }
 
 
