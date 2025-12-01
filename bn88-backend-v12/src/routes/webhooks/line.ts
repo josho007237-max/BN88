@@ -2,12 +2,14 @@
 
 import { Router, type Request, type Response } from "express";
 import crypto from "node:crypto";
+import { MessageType } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import { config } from "../../config";
 import {
   processIncomingMessage,
   type SupportedPlatform,
 } from "../../services/inbound/processIncomingMessage";
+import { createRequestLogger, getRequestId } from "../../utils/logger";
 
 const router = Router();
 const TENANT_DEFAULT = process.env.TENANT_DEFAULT || "bn9";
@@ -61,6 +63,10 @@ type LineMessage = {
   fileSize?: number;
   packageId?: string;
   stickerId?: string;
+  title?: string;
+  address?: string;
+  latitude?: number;
+  longitude?: number;
 };
 
 type LineEvent = {
@@ -77,7 +83,14 @@ type LineWebhookBody = {
 
 const LINE_CONTENT_BASE = "https://api-data.line.me/v2/bot/message";
 
-function mapLineMessage(m?: LineMessage) {
+export type NormalizedLineMessage = {
+  text: string;
+  messageType: MessageType;
+  attachmentUrl?: string | null;
+  attachmentMeta?: Record<string, unknown> | null;
+};
+
+export function mapLineMessage(m?: LineMessage): NormalizedLineMessage | null {
   if (!m || typeof m !== "object") return null;
 
   const baseMeta = {
@@ -87,12 +100,12 @@ function mapLineMessage(m?: LineMessage) {
     fileSize: m.fileSize,
     packageId: m.packageId,
     stickerId: m.stickerId,
-  };
+  } as Record<string, unknown>;
 
   if (m.type === "text") {
     return {
       text: m.text ?? "",
-      messageType: "TEXT" as const,
+      messageType: MessageType.TEXT,
       attachmentUrl: null,
       attachmentMeta: baseMeta,
     };
@@ -101,7 +114,7 @@ function mapLineMessage(m?: LineMessage) {
   if (m.type === "image") {
     return {
       text: m.text ?? "",
-      messageType: "IMAGE" as const,
+      messageType: MessageType.IMAGE,
       attachmentUrl: m.id ? `${LINE_CONTENT_BASE}/${m.id}/content` : null,
       attachmentMeta: baseMeta,
     };
@@ -110,7 +123,7 @@ function mapLineMessage(m?: LineMessage) {
   if (m.type === "file") {
     return {
       text: m.text ?? m.fileName ?? "",
-      messageType: "FILE" as const,
+      messageType: MessageType.FILE,
       attachmentUrl: m.id ? `${LINE_CONTENT_BASE}/${m.id}/content` : null,
       attachmentMeta: baseMeta,
     };
@@ -119,15 +132,37 @@ function mapLineMessage(m?: LineMessage) {
   if (m.type === "sticker") {
     return {
       text: m.text ?? "",
-      messageType: "STICKER" as const,
+      messageType: MessageType.STICKER,
       attachmentUrl: null,
       attachmentMeta: baseMeta,
     };
   }
 
+  if (m.type === "location") {
+    const lat = m.latitude;
+    const lng = m.longitude;
+    const locUrl =
+      typeof lat === "number" && typeof lng === "number"
+        ? `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`
+        : null;
+
+    return {
+      text: m.address ?? m.title ?? "location",
+      messageType: MessageType.SYSTEM,
+      attachmentUrl: locUrl,
+      attachmentMeta: {
+        ...baseMeta,
+        address: m.address,
+        title: m.title,
+        latitude: lat,
+        longitude: lng,
+      },
+    };
+  }
+
   return {
     text: m.text ?? "",
-    messageType: "TEXT" as const,
+    messageType: MessageType.TEXT,
     attachmentUrl: null,
     attachmentMeta: baseMeta,
   };
@@ -219,6 +254,8 @@ async function lineReply(
 /* ------------------------------------------------------------------ */
 
 router.post("/", async (req: Request, res: Response) => {
+  const requestId = getRequestId(req);
+  const log = createRequestLogger(requestId);
   try {
     // 1) resolve tenant & bot
     const tenantHeader =
@@ -231,10 +268,7 @@ router.post("/", async (req: Request, res: Response) => {
 
     const picked = await resolveBot(tenantHeader, botIdParam);
     if (!picked) {
-      console.error(
-        "[LINE webhook] bot not configured for tenant:",
-        tenantHeader
-      );
+      log.error("[LINE webhook] bot not configured for tenant", tenantHeader);
       return res
         .status(400)
         .json({ ok: false, message: "line_bot_not_configured" });
@@ -244,7 +278,7 @@ router.post("/", async (req: Request, res: Response) => {
 
     // 2) verify signature
     if (!verifyLineSignature(req, channelSecret)) {
-      console.warn("[LINE webhook] invalid signature");
+      log.warn("[LINE webhook] invalid signature");
       return res.status(401).json({ ok: false, message: "invalid_signature" });
     }
 
@@ -310,7 +344,7 @@ router.post("/", async (req: Request, res: Response) => {
           text,
           messageType: mapped.messageType,
           attachmentUrl: mapped.attachmentUrl ?? undefined,
-          attachmentMeta: mapped.attachmentMeta,
+          attachmentMeta: mapped.attachmentMeta ?? undefined,
           displayName,
           platformMessageId,
           rawPayload: ev,
@@ -327,7 +361,7 @@ router.post("/", async (req: Request, res: Response) => {
               reply
             ).catch(() => false);
           } catch (err) {
-            console.error("[LINE reply error]", err);
+            log.error("[LINE reply error]", err);
             replySent = false;
           }
         }
@@ -339,15 +373,21 @@ router.post("/", async (req: Request, res: Response) => {
           isIssue,
         });
       } catch (evErr) {
-        console.error("[LINE webhook event error]", evErr);
+        log.error("[LINE webhook event error]", evErr);
         results.push({ ok: false, error: true });
       }
     }
 
     // 7) ตอบกลับ LINE ว่าสำเร็จ (สำคัญมากเพื่อไม่ให้ retry ถี่)
-    return res.status(200).json({ ok: true, results, retry: isRetry, tenant });
+    return res.status(200).json({
+      ok: true,
+      results,
+      retry: isRetry,
+      tenant,
+      requestId,
+    });
   } catch (e) {
-    console.error("[LINE WEBHOOK ERROR]", e);
+    log.error("[LINE WEBHOOK ERROR]", e);
     return res.status(500).json({ ok: false, message: "internal_error" });
   }
 });

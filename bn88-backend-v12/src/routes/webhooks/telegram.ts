@@ -8,6 +8,7 @@ import {
 } from "../../services/inbound/processIncomingMessage";
 import { sendTelegramMessage } from "../../services/telegram";
 import { MessageType } from "@prisma/client";
+import { createRequestLogger, getRequestId } from "../../utils/logger";
 
 const router = Router();
 
@@ -27,6 +28,7 @@ type TgMessage = {
   photo?: Array<{ file_id: string; file_size?: number; width?: number; height?: number }>;
   document?: { file_id: string; file_name?: string; mime_type?: string; file_size?: number };
   sticker?: { file_id: string; set_name?: string; width?: number; height?: number };
+  location?: { latitude: number; longitude: number; horizontal_accuracy?: number };
   chat: TgChat;
   from?: TgUser;
 };
@@ -45,13 +47,20 @@ function isTextMessage(msg: any): msg is TgMessage & { text: string } {
   );
 }
 
-function mapTelegramMessage(msg?: TgMessage) {
+export type NormalizedTelegramMessage = {
+  messageType: MessageType;
+  text: string;
+  attachmentUrl?: string | null;
+  attachmentMeta?: Record<string, unknown> | null;
+};
+
+export function mapTelegramMessage(msg?: TgMessage): NormalizedTelegramMessage | null {
   if (!msg || !msg.chat) return null;
 
   if (msg.photo && msg.photo.length > 0) {
     const best = msg.photo[msg.photo.length - 1];
     return {
-      type: "IMAGE" as MessageType,
+      messageType: MessageType.IMAGE,
       text: msg.text ?? msg.caption ?? "",
       attachmentUrl: undefined,
       attachmentMeta: {
@@ -65,9 +74,11 @@ function mapTelegramMessage(msg?: TgMessage) {
 
   if (msg.document) {
     return {
-      type: "FILE" as MessageType,
+      messageType: MessageType.FILE,
       text: msg.text ?? msg.caption ?? msg.document.file_name ?? "",
-      attachmentUrl: undefined,
+      attachmentUrl: msg.document.file_id
+        ? `tg:file/${msg.document.file_id}`
+        : undefined,
       attachmentMeta: {
         fileId: msg.document.file_id,
         fileName: msg.document.file_name,
@@ -79,9 +90,11 @@ function mapTelegramMessage(msg?: TgMessage) {
 
   if (msg.sticker) {
     return {
-      type: "STICKER" as MessageType,
+      messageType: MessageType.STICKER,
       text: msg.text ?? "",
-      attachmentUrl: undefined,
+      attachmentUrl: msg.sticker.file_id
+        ? `tg:sticker/${msg.sticker.file_id}`
+        : undefined,
       attachmentMeta: {
         fileId: msg.sticker.file_id,
         setName: msg.sticker.set_name,
@@ -91,9 +104,22 @@ function mapTelegramMessage(msg?: TgMessage) {
     };
   }
 
+  if (msg.location) {
+    return {
+      messageType: MessageType.SYSTEM,
+      text: msg.text ?? msg.caption ?? "location",
+      attachmentUrl: `https://www.google.com/maps/search/?api=1&query=${msg.location.latitude},${msg.location.longitude}`,
+      attachmentMeta: {
+        latitude: msg.location.latitude,
+        longitude: msg.location.longitude,
+        horizontalAccuracy: msg.location.horizontal_accuracy,
+      },
+    };
+  }
+
   if (isTextMessage(msg)) {
     return {
-      type: "TEXT" as MessageType,
+      messageType: MessageType.TEXT,
       text: msg.text ?? "",
       attachmentUrl: undefined,
       attachmentMeta: undefined,
@@ -140,6 +166,8 @@ async function resolveBot(tenant: string, botIdParam?: string) {
 }
 
 router.post("/", async (req: Request, res: Response) => {
+  const requestId = getRequestId(req);
+  const log = createRequestLogger(requestId);
   try {
     const tenant =
       (req.headers["x-tenant"] as string) || config.TENANT_DEFAULT || "bn9";
@@ -149,10 +177,7 @@ router.post("/", async (req: Request, res: Response) => {
 
     const picked = await resolveBot(tenant, botIdParam);
     if (!picked) {
-      console.error(
-        "[TELEGRAM webhook] bot not configured for tenant:",
-        tenant
-      );
+      log.error("[TELEGRAM webhook] bot not configured for tenant", tenant);
       return res
         .status(400)
         .json({ ok: false, message: "telegram_bot_not_configured" });
@@ -162,7 +187,7 @@ router.post("/", async (req: Request, res: Response) => {
     const update = req.body as TgUpdate;
 
     if (!update || !update.message) {
-      console.log("[TELEGRAM] skip update (no message)", update?.message);
+      log.info("[TELEGRAM] skip update (no message)", update?.message);
       return res
         .status(200)
         .json({ ok: true, skipped: true, reason: "no_message" });
@@ -170,7 +195,7 @@ router.post("/", async (req: Request, res: Response) => {
 
     const mapped = mapTelegramMessage(update.message);
     if (!mapped) {
-      console.log("[TELEGRAM] skip update (unsupported message)", update.message);
+      log.info("[TELEGRAM] skip update (unsupported message)", update.message);
       return res
         .status(200)
         .json({ ok: true, skipped: true, reason: "unsupported_message" });
@@ -190,9 +215,9 @@ router.post("/", async (req: Request, res: Response) => {
       platform,
       userId,
       text,
-      messageType: mapped.type,
-      attachmentUrl: mapped.attachmentUrl,
-      attachmentMeta: mapped.attachmentMeta,
+      messageType: mapped.messageType,
+      attachmentUrl: mapped.attachmentUrl ?? undefined,
+      attachmentMeta: mapped.attachmentMeta ?? undefined,
       displayName: from?.first_name || from?.username,
       platformMessageId,
       rawPayload: update,
@@ -210,13 +235,13 @@ router.post("/", async (req: Request, res: Response) => {
         msg.message_id
       );
     } else {
-      console.warn("[TELEGRAM] skip send (no reply or no botToken)", {
+      log.warn("[TELEGRAM] skip send (no reply or no botToken)", {
         hasReply,
         hasBotToken,
       });
     }
 
-    console.log("[TELEGRAM] handled message", {
+    log.info("[TELEGRAM] handled message", {
       botId,
       tenant: botTenant,
       userId,
@@ -226,12 +251,15 @@ router.post("/", async (req: Request, res: Response) => {
       intent,
       isIssue,
       replied,
+      requestId,
     });
 
-    return res.status(200).json({ ok: true, replied, intent, isIssue });
+    return res
+      .status(200)
+      .json({ ok: true, replied, intent, isIssue, requestId });
   } catch (e) {
-    console.error("[TELEGRAM WEBHOOK ERROR]", e);
-    return res.status(500).json({ ok: false, message: "internal_error" });
+    log.error("[TELEGRAM WEBHOOK ERROR]", e);
+    return res.status(500).json({ ok: false, message: "internal_error", requestId });
   }
 });
 
