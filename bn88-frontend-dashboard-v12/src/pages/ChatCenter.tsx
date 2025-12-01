@@ -30,6 +30,7 @@ import {
 } from "../lib/api";
 
 const POLL_INTERVAL_MS = 3000; // 3 วินาที
+const PAGE_SIZE = 50;
 
 type PlatformFilterValue =
   | "all"
@@ -44,6 +45,17 @@ type MetricsSnapshot = {
   errorTotal: number;
   perChannel: Record<string, { sent: number; errors: number }>;
   updatedAt?: string;
+};
+
+type ConversationGroup = {
+  conversationId: string;
+  messages: ChatMessage[];
+  latestAt: number;
+  session?: ChatMessage["session"];
+  platform: string | null;
+  botId: string | null;
+  displayName?: string;
+  userId?: string;
 };
 
 /* ---------------------- Intent helpers (frontend only) ---------------------- */
@@ -105,6 +117,9 @@ const ChatCenter: React.FC = () => {
   const [selectedSession, setSelectedSession] =
     useState<ChatSession | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [selectedConversationId, setSelectedConversationId] =
+    useState<string | null>(null);
+  const [conversationPage, setConversationPage] = useState(1);
   const [searchTerm, setSearchTerm] = useState("");
   const [searchResults, setSearchResults] = useState<ChatMessage[] | null>(null);
   const [searching, setSearching] = useState(false);
@@ -340,23 +355,14 @@ const ChatCenter: React.FC = () => {
     };
   }, [selectedBotId, tenant, apiBase, fetchSessions, fetchMessages, selectedSession?.id]);
 
-  /* ---------------- scroll ลงล่างเมื่อมีข้อความใหม่ ---------------- */
-
-  useEffect(() => {
-    if (messagesRef.current) {
-      messagesRef.current.scrollTo({
-        top: messagesRef.current.scrollHeight,
-        behavior: "smooth",
-      });
-    }
-  }, [messages.length, searchResults?.length]);
-
   /* ----------------------------- handlers ----------------------------- */
 
   const handleSelectSession = (s: ChatSession) => {
     setSelectedSession(s);
     setReplyText("");
     setSearchResults(null);
+    setSelectedConversationId(s.id);
+    setConversationPage(1);
   };
 
   const handleSendReply = async () => {
@@ -486,10 +492,85 @@ const ChatCenter: React.FC = () => {
     });
   }, [sessions, sessionQuery, platformFilter]);
 
-  const displayedMessages = useMemo(
-    () => searchResults ?? messages,
-    [searchResults, messages]
+  const normalizedMessages = useMemo(
+    () =>
+      (searchResults ?? messages).map((m) => ({
+        ...m,
+        conversationId: m.conversationId || m.sessionId,
+      })),
+    [messages, searchResults]
   );
+
+  const conversationGroups = useMemo<ConversationGroup[]>(() => {
+    const map = new Map<string, ChatMessage[]>();
+    for (const m of normalizedMessages) {
+      const cid = m.conversationId || m.sessionId || "unknown";
+      const prev = map.get(cid) ?? [];
+      prev.push(m);
+      map.set(cid, prev);
+    }
+
+    const groups = Array.from(map.entries()).map(([conversationId, msgs]) => {
+      const sorted = [...msgs].sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+      const latest = sorted[sorted.length - 1];
+      return {
+        conversationId,
+        messages: sorted,
+        latestAt: latest ? new Date(latest.createdAt).getTime() : 0,
+        session: latest?.session,
+        platform: latest?.platform ?? latest?.session?.platform ?? null,
+        botId: latest?.botId ?? latest?.session?.botId ?? null,
+        displayName: latest?.session?.displayName ?? undefined,
+        userId: latest?.session?.userId ?? undefined,
+      };
+    });
+
+    return groups.sort((a, b) => b.latestAt - a.latestAt);
+  }, [normalizedMessages]);
+
+  useEffect(() => {
+    if (conversationGroups.length === 0) {
+      setSelectedConversationId(null);
+      setConversationPage(1);
+      return;
+    }
+    setSelectedConversationId((prev) => {
+      if (prev && conversationGroups.some((c) => c.conversationId === prev)) {
+        return prev;
+      }
+      return conversationGroups[0]?.conversationId ?? null;
+    });
+    setConversationPage(1);
+  }, [conversationGroups]);
+
+  const activeConversation = useMemo(() => {
+    if (!selectedConversationId) return conversationGroups[0] ?? null;
+    return (
+      conversationGroups.find((c) => c.conversationId === selectedConversationId) ??
+      conversationGroups[0] ??
+      null
+    );
+  }, [conversationGroups, selectedConversationId]);
+
+  const totalPages = useMemo(() => {
+    if (!activeConversation) return 1;
+    return Math.max(1, Math.ceil(activeConversation.messages.length / PAGE_SIZE));
+  }, [activeConversation]);
+
+  useEffect(() => {
+    setConversationPage((prev) => {
+      if (prev > totalPages) return totalPages;
+      return prev;
+    });
+  }, [totalPages]);
+
+  const pagedMessages = useMemo(() => {
+    if (!activeConversation) return [] as ChatMessage[];
+    const start = (conversationPage - 1) * PAGE_SIZE;
+    return activeConversation.messages.slice(start, start + PAGE_SIZE);
+  }, [activeConversation, conversationPage]);
 
   /* ------------------------- group messages by day ------------------------- */
 
@@ -498,7 +579,7 @@ const ChatCenter: React.FC = () => {
       ChatMessage & { _showDateHeader?: boolean; _dateLabel?: string }
     > = [];
     let lastDateKey = "";
-    for (const m of displayedMessages) {
+    for (const m of pagedMessages) {
       const d = new Date(m.createdAt);
       const dateKey = d.toISOString().slice(0, 10); // YYYY-MM-DD
       let show = false;
@@ -511,9 +592,23 @@ const ChatCenter: React.FC = () => {
       result.push({ ...m, _showDateHeader: show, _dateLabel: label });
     }
     return result;
-  }, [displayedMessages]);
+  }, [pagedMessages]);
+
+  /* ---------------- scroll ลงล่างเมื่อมีข้อความใหม่ ---------------- */
+
+  useEffect(() => {
+    if (messagesRef.current) {
+      messagesRef.current.scrollTo({
+        top: messagesRef.current.scrollHeight,
+        behavior: "smooth",
+      });
+    }
+  }, [pagedMessages.length, selectedConversationId, conversationPage]);
 
   /* ------------------------- helper แปลง platform เป็น label ------------------------- */
+
+  const conversationLabel = (c: ConversationGroup) =>
+    c.displayName || c.userId || c.conversationId;
 
   const platformLabel = (p?: string | null) => {
     const plat = (p || "").toLowerCase();
@@ -804,31 +899,119 @@ const ChatCenter: React.FC = () => {
             </div>
           )}
 
+          <div className="px-4 py-3 border-b border-zinc-800 bg-black/10 flex flex-col gap-2">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 text-xs text-zinc-300">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="text-zinc-400">สนทนา:</span>
+                {activeConversation ? (
+                  <span className="font-medium">
+                    {conversationLabel(activeConversation)}
+                  </span>
+                ) : (
+                  <span className="text-zinc-500">-</span>
+                )}
+                {activeConversation?.platform && (
+                  <span className="px-2 py-0.5 rounded-full bg-zinc-800 border border-zinc-700 text-[11px]">
+                    {platformLabel(activeConversation.platform)}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-zinc-400">
+                  หน้า {conversationPage} / {totalPages}
+                </span>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setConversationPage((p) => Math.max(1, p - 1))
+                    }
+                    disabled={conversationPage <= 1}
+                    className="px-2 py-1 rounded border border-zinc-700 text-zinc-200 text-[11px] disabled:opacity-50"
+                  >
+                    ก่อนหน้า
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setConversationPage((p) =>
+                        Math.min(totalPages, p + 1)
+                      )
+                    }
+                    disabled={conversationPage >= totalPages}
+                    className="px-2 py-1 rounded border border-zinc-700 text-zinc-200 text-[11px] disabled:opacity-50"
+                  >
+                    ถัดไป
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-2 overflow-x-auto pt-1">
+              {conversationGroups.length === 0 && (
+                <span className="text-[11px] text-zinc-500">ไม่มีข้อความ</span>
+              )}
+              {conversationGroups.map((c) => {
+                const isActive = c.conversationId === selectedConversationId;
+                return (
+                  <button
+                    key={c.conversationId}
+                    type="button"
+                    onClick={() => {
+                      setSelectedConversationId(c.conversationId);
+                      setConversationPage(1);
+                    }}
+                    className={`px-3 py-2 rounded-lg border text-left text-[11px] min-w-[180px] transition ${
+                      isActive
+                        ? "border-emerald-500/70 bg-emerald-500/10 text-emerald-100"
+                        : "border-zinc-700 bg-zinc-900 text-zinc-200"
+                    }`}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-xs">
+                        {conversationLabel(c)}
+                      </span>
+                      {c.platform && (
+                        <span className="px-2 py-0.5 rounded-full bg-black/30 border border-white/10 text-[10px]">
+                          {platformLabel(c.platform)}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[10px] text-zinc-400 mt-1">
+                      {c.messages.length} ข้อความ
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           <div
             ref={messagesRef}
             className="flex-1 overflow-y-auto px-4 py-3 space-y-2 text-sm min-h-0"
           >
-            {loadingMessages && !searchResults && (
+            {loadingMessages && !isSearchMode && (
               <div className="text-zinc-400 text-xs">
                 กำลังโหลดข้อความ...
               </div>
             )}
 
-            {!loadingMessages && !searchResults &&
-              messages.length === 0 &&
-              selectedSession && (
+            {!loadingMessages &&
+              !isSearchMode &&
+              selectedSession &&
+              (!activeConversation || activeConversation.messages.length === 0) && (
               <div className="text-zinc-400 text-xs">
                 ยังไม่มีข้อความในห้องนี้
               </div>
             )}
 
-            {!selectedSession && !searchResults && (
+            {!isSearchMode && !selectedSession && (
               <div className="text-zinc-500 text-xs">
                 กรุณาเลือกลูกค้าจากด้านซ้ายเพื่อดูประวัติแชท
               </div>
             )}
 
-            {searchResults && searchResults.length === 0 && (
+            {isSearchMode && searchResults && searchResults.length === 0 && (
               <div className="text-zinc-400 text-xs">
                 ไม่พบข้อความที่ตรงกับคำค้นหา
               </div>

@@ -137,6 +137,7 @@ export type MessageType = "TEXT" | "IMAGE" | "FILE" | "STICKER" | "SYSTEM";
 export type ChatMessage = {
   id: string;
   sessionId: string;
+  conversationId?: string | null;
 
   tenant: string;
   botId: string;
@@ -164,6 +165,12 @@ export type ChatMessage = {
     botId?: string | null;
   };
 };
+
+const normalizeChatMessage = (m: ChatMessage): ChatMessage => ({
+  ...m,
+  conversationId:
+    (m as any).conversationId ?? m.sessionId ?? (m.session?.id ?? null),
+});
 
 /* ---- Knowledge types ---- */
 
@@ -649,7 +656,8 @@ export async function getChatMessages(
     { params: { limit } }
   );
   const data = res.data as any;
-  return data.items ?? data.messages ?? [];
+  const items: ChatMessage[] = data.items ?? data.messages ?? [];
+  return items.map(normalizeChatMessage);
 }
 
 // ตำแหน่งเดิมที่คุณเขียน replyChatSession เอาออกไปเลย แล้วแทนด้วยโค้ดนี้
@@ -697,7 +705,8 @@ export async function searchChatMessages(params: {
     }
   );
   const data = res.data as any;
-  return data.items ?? [];
+  const items: ChatMessage[] = data.items ?? [];
+  return items.map(normalizeChatMessage);
 }
 
 /* ============================== Knowledge APIs ============================== */
