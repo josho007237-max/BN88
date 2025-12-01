@@ -177,14 +177,15 @@ async function consumeRateLimit(channelId: string, requestId?: string) {
     const redis = await getRedisClient();
     const minuteKey = new Date().toISOString().slice(0, 16); // YYYY-MM-DDTHH:MM
     const key = `rate:${channelId}:${minuteKey}`;
+    const windowSeconds = config.MESSAGE_RATE_LIMIT_WINDOW_SECONDS;
     const multi = redis.multi();
-    const results = await multi.incr(key).expire(key, 90, "NX").exec();
+    const results = await multi.incr(key).expire(key, windowSeconds, "NX").exec();
     const count = Number(results?.[0] ?? 0);
 
     let ttlSeconds = await redis.ttl(key);
     if (ttlSeconds < 0) {
-      await redis.expire(key, 90);
-      ttlSeconds = 90;
+      await redis.expire(key, windowSeconds);
+      ttlSeconds = windowSeconds;
     }
 
     const allowed = count <= config.MESSAGE_RATE_LIMIT_PER_MIN;
