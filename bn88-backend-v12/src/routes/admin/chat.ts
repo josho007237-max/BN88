@@ -38,9 +38,25 @@ const searchQuerySchema = z.object({
   userId: z.string().optional(),
 });
 
+const messagesQuerySchema = z.object({
+  conversationId: z.string().trim().optional(),
+  sessionId: z.string().trim().optional(),
+  limit: z.coerce.number().int().positive().max(500).optional(),
+  offset: z.coerce.number().int().min(0).optional(),
+});
+
 /* ------------------------------------------------------------------ */
 /* Helpers                                                            */
 /* ------------------------------------------------------------------ */
+
+class HttpError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
 
 function getTenant(req: Request): string {
   return (
@@ -48,6 +64,105 @@ function getTenant(req: Request): string {
     config.TENANT_DEFAULT ||
     TENANT_DEFAULT
   );
+}
+
+type PrismaLike = typeof prisma;
+
+type MessagesQuery = {
+  tenant: string;
+  conversationId?: string;
+  sessionId?: string;
+  limit?: number;
+  offset?: number;
+  requestId?: string;
+};
+
+async function fetchAdminChatMessages(
+  params: MessagesQuery,
+  client: PrismaLike = prisma
+): Promise<{ conversationId: string | null; items: any[]; conversation?: any }>
+{
+  const { tenant, conversationId, sessionId, limit = 200, offset = 0, requestId } = params;
+  if (!conversationId && !sessionId) {
+    throw new HttpError(400, "conversationId_or_sessionId_required");
+  }
+
+  const log = createRequestLogger(requestId);
+
+  let conversation: any | null = null;
+  if (conversationId) {
+    conversation = await client.conversation.findFirst({
+      where: { id: conversationId, tenant },
+      select: { id: true, botId: true, userId: true },
+    });
+    if (!conversation) {
+      throw new HttpError(404, "conversation_not_found");
+    }
+  }
+
+  let session: any | null = null;
+  if (!conversationId && sessionId) {
+    session = await client.chatSession.findFirst({
+      where: { id: sessionId, tenant },
+      select: { id: true, botId: true, platform: true, userId: true },
+    });
+    if (!session) {
+      throw new HttpError(404, "chat_session_not_found");
+    }
+    conversation = await client.conversation.findFirst({
+      where: { botId: session.botId, userId: session.userId, tenant },
+      select: { id: true, botId: true, userId: true },
+    });
+  }
+
+  const whereClause = conversationId
+    ? { conversationId }
+    : { sessionId: session?.id };
+
+  const messages = await client.chatMessage.findMany({
+    where: whereClause,
+    orderBy: { createdAt: "asc" },
+    skip: offset,
+    take: limit,
+    include: {
+      conversation: { select: { id: true, botId: true, userId: true } },
+      session: { select: { userId: true, platform: true } },
+    },
+  });
+
+  const resolvedConversation =
+    conversation ?? messages[0]?.conversation ?? undefined;
+
+  log.info(
+    `[Admin] chat/messages conversationId=${
+      resolvedConversation?.id ?? conversationId ?? null
+    } count=${messages.length}`
+  );
+
+  const items = messages.map((m) => ({
+    id: m.id,
+    conversationId: m.conversationId ?? resolvedConversation?.id ?? null,
+    sessionId: m.sessionId,
+    userId: m.session?.userId ?? null,
+    platform: m.platform,
+    text: m.text,
+    createdAt: m.createdAt,
+    meta: m.meta,
+    attachmentUrl: m.attachmentUrl,
+    attachmentMeta: m.attachmentMeta,
+    type: m.type,
+  }));
+
+  return {
+    conversationId: resolvedConversation?.id ?? conversationId ?? null,
+    conversation: resolvedConversation
+      ? {
+          ...resolvedConversation,
+          platform: messages[0]?.platform ?? session?.platform ?? null,
+        }
+      : undefined,
+    items,
+  };
 }
 
 async function sendLinePushMessage(
@@ -314,6 +429,50 @@ router.get(
 );
 
 /* ------------------------------------------------------------------ */
+/* GET /api/admin/chat/messages                                        */
+/* ------------------------------------------------------------------ */
+
+router.get(
+  "/messages",
+  requirePermission(["manageCampaigns", "viewReports"]),
+  async (req: Request, res: Response): Promise<Response> => {
+    const requestId = getRequestId(req);
+    const log = createRequestLogger(requestId);
+    try {
+      const tenant = getTenant(req);
+      const parsed = messagesQuerySchema.safeParse(req.query ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ ok: false, message: "invalid_query" });
+      }
+
+      const { conversationId, sessionId, limit = 200, offset = 0 } = parsed.data;
+      if (!conversationId && !sessionId) {
+        return res
+          .status(400)
+          .json({ ok: false, message: "conversationId_or_sessionId_required" });
+      }
+
+      const result = await fetchAdminChatMessages(
+        { tenant, conversationId, sessionId, limit, offset, requestId },
+        prisma
+      );
+
+      log.info(
+        `[Admin] chat/messages conversationId=${result.conversationId} count=${result.items.length}`
+      );
+
+      return res.json({ ok: true, ...result });
+    } catch (err: any) {
+      if (err instanceof HttpError) {
+        return res.status(err.status).json({ ok: false, message: err.message });
+      }
+      log.error({ err, requestId }, "chat_messages_error");
+      return res.status(500).json({ ok: false, message: "internal_error_list_messages" });
+    }
+  }
+);
+
+/* ------------------------------------------------------------------ */
 /* GET /api/admin/chat/sessions/:id/messages                          */
 /* ------------------------------------------------------------------ */
 
@@ -555,4 +714,4 @@ router.post(
 /* ------------------------------------------------------------------ */
 
 export default router;
-export { router as chatAdminRouter };
+export { router as chatAdminRouter, fetchAdminChatMessages, HttpError };
