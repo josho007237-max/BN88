@@ -77,7 +77,7 @@ async function findBot(
 /* -------------------------------------------------------------------------- */
 
 // GET /api/admin/bots
-router.get("/", requirePermission(["bots:read"]), async (_req: Request, res: Response) => {
+router.get("/", requirePermission(["manageBots"]), async (_req: Request, res: Response) => {
   try {
     const items = await prisma.bot.findMany({
       orderBy: { createdAt: "desc" },
@@ -100,14 +100,14 @@ router.get("/", requirePermission(["bots:read"]), async (_req: Request, res: Res
 });
 
 // GET /api/admin/bots/:id
-router.get("/:id", requirePermission(["bots:read"]), findBot, (req: Request, res: Response) => {
+router.get("/:id", requirePermission(["manageBots"]), findBot, (req: Request, res: Response) => {
   return res.json({ ok: true, bot: (req as RequestWithBot).bot as Bot });
 });
 
 // PATCH /api/admin/bots/:id
 router.patch(
   "/:id",
-  requirePermission(["bots:write"]),
+  requirePermission(["manageBots"]),
   findBot,
   async (req: Request, res: Response): Promise<any> => {
     try {
@@ -159,7 +159,7 @@ router.patch(
 );
 
 // POST /api/admin/bots/init
-router.post("/init", requirePermission(["bots:write"]), async (_req: Request, res: Response) => {
+router.post("/init", requirePermission(["manageBots"]), async (_req: Request, res: Response) => {
   try {
     const TENANT = "bn9";
     const NAME = "admin-bot-001";

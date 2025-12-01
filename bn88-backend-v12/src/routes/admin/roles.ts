@@ -10,12 +10,12 @@ const assignSchema = z.object({
   roleId: z.string().min(1),
 });
 
-router.get("/permissions", requirePermission(["roles:manage"]), async (_req, res) => {
+router.get("/permissions", requirePermission(["manageBots"]), async (_req, res) => {
   const items = await prisma.permission.findMany({ orderBy: { name: "asc" } });
   return res.json({ ok: true, items });
 });
 
-router.get("/admin-users", requirePermission(["roles:manage"]), async (_req, res) => {
+router.get("/admin-users", requirePermission(["manageBots"]), async (_req, res) => {
   const admins = await prisma.adminUser.findMany({
     select: {
       id: true,
@@ -43,7 +43,7 @@ router.get("/admin-users", requirePermission(["roles:manage"]), async (_req, res
   return res.json({ ok: true, items });
 });
 
-router.get("/", requirePermission(["roles:manage"]), async (_req: Request, res: Response) => {
+router.get("/", requirePermission(["manageBots"]), async (_req: Request, res: Response) => {
   const roles = await prisma.role.findMany({
     orderBy: { name: "asc" },
     include: { permissions: { include: { permission: true } } },
@@ -61,7 +61,7 @@ router.get("/", requirePermission(["roles:manage"]), async (_req: Request, res: 
 
 router.post(
   "/assign",
-  requirePermission(["roles:manage"]),
+  requirePermission(["manageBots"]),
   async (req: Request, res: Response) => {
     const parsed = assignSchema.safeParse(req.body ?? {});
     if (!parsed.success) {

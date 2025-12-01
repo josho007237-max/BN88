@@ -217,7 +217,7 @@ async function sendTelegramRich(
 
 router.get(
   "/sessions",
-  requirePermission(["chat:read"]),
+  requirePermission(["manageCampaigns", "viewReports"]),
   async (req: Request, res: Response) => {
   try {
     const tenant = getTenant(req);
@@ -254,7 +254,7 @@ router.get(
 
 router.get(
   "/sessions/:id/messages",
-  requirePermission(["chat:read"]),
+  requirePermission(["manageCampaigns", "viewReports"]),
   async (req: Request, res: Response): Promise<Response> => {
     try {
       const tenant = getTenant(req);
@@ -293,7 +293,7 @@ router.get(
 
 router.post(
   "/sessions/:id/reply",
-  requirePermission(["chat:send"]),
+  requirePermission(["manageCampaigns"]),
   async (req: Request, res: Response): Promise<Response> => {
     try {
       const requestId = getRequestId(req);
