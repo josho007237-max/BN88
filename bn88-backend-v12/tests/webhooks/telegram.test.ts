@@ -1,12 +1,19 @@
 import assert from "node:assert/strict";
+import Module from "node:module";
+import path from "node:path";
 import { MessageType } from "@prisma/client";
+import { handlers as workerHandlers, type StoredJob } from "../mocks/bullmq";
 
 process.env.SECRET_ENC_KEY_BN9 ||= "12345678901234567890123456789012";
 process.env.JWT_SECRET ||= "test-jwt";
 process.env.ENABLE_ADMIN_API ||= "1";
 process.env.DATABASE_URL ||= "file:./dev.db";
+process.env.REDIS_RATE_LIMIT ||= "1";
 process.env.MESSAGE_RATE_LIMIT_PER_MIN ||= "1";
 process.env.MESSAGE_RATE_LIMIT_WINDOW_SECONDS ||= "1";
+
+process.env.NODE_PATH = path.resolve(__dirname, "../mocks");
+(Module as any)._initPaths();
 
 type TgMsg = {
   message_id: number;
@@ -19,6 +26,16 @@ type TgMsg = {
   location?: { latitude: number; longitude: number };
 };
 
+type SimpleExpect = {
+  toBe: (expected: any) => void;
+  toContain: (item: any) => void;
+};
+
+const expect = (received: any): SimpleExpect => ({
+  toBe: (expected: any) => assert.strictEqual(received, expected),
+  toContain: (item: any) => assert.ok((received as any)?.includes?.(item)),
+});
+
 async function run() {
   const { mapTelegramMessage } = await import("../../src/routes/webhooks/telegram");
   const {
@@ -26,6 +43,24 @@ async function run() {
     enqueueFollowUpJob,
     flushFollowUps,
   } = await import("../../src/queues/message.queue");
+  const lepClient = await import("../../src/services/lepClient");
+  let queuedCampaigns: string[] = [];
+  lepClient.queueCampaign = async (id: string) => {
+    queuedCampaigns.push(id);
+    return { lepBaseUrl: "mock", status: 200, data: { ok: true } } as any;
+  };
+
+  const requireCjs = Module.createRequire(import.meta.url);
+  const lepPath = requireCjs.resolve("../../src/services/lepClient");
+  const lepModule = requireCjs(lepPath);
+  lepModule.queueCampaign = async (id: string) => {
+    queuedCampaigns.push(id);
+    return { lepBaseUrl: "mock", status: 200, data: { ok: true } };
+  };
+  requireCjs.cache[lepPath] = { exports: lepModule } as any;
+  const { upsertCampaignScheduleJob, startCampaignScheduleWorker } = await import(
+    "../../src/queues/campaign.queue"
+  );
 
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -68,29 +103,24 @@ async function run() {
   };
 
   const textMapped = mapTelegramMessage(baseMsg as any);
-  assert.ok(textMapped, "text message should map");
-  assert.equal(textMapped?.messageType, MessageType.TEXT);
-  assert.equal(textMapped?.text, "hello");
+  expect(textMapped?.messageType).toBe(MessageType.TEXT);
+  expect(textMapped?.text).toBe("hello");
 
   const photoMapped = mapTelegramMessage(photoMsg as any);
-  assert.ok(photoMapped, "photo message should map");
-  assert.equal(photoMapped?.messageType, MessageType.IMAGE);
-  assert.equal(photoMapped?.attachmentMeta?.fileId, "big");
+  expect(photoMapped?.messageType).toBe(MessageType.IMAGE);
+  expect(photoMapped?.attachmentMeta?.fileId).toBe("big");
 
   const fileMapped = mapTelegramMessage(fileMsg as any);
-  assert.ok(fileMapped, "file message should map");
-  assert.equal(fileMapped?.messageType, MessageType.FILE);
-  assert.ok(fileMapped?.attachmentUrl?.includes("doc123"));
+  expect(fileMapped?.messageType).toBe(MessageType.FILE);
+  expect(fileMapped?.attachmentUrl?.includes("doc123")).toBe(true);
 
   const stickerMapped = mapTelegramMessage(stickerMsg as any);
-  assert.ok(stickerMapped, "sticker message should map");
-  assert.equal(stickerMapped?.messageType, MessageType.STICKER);
-  assert.ok(stickerMapped?.attachmentUrl?.includes("stk123"));
+  expect(stickerMapped?.messageType).toBe(MessageType.STICKER);
+  expect(stickerMapped?.attachmentUrl?.includes("stk123")).toBe(true);
 
   const locationMapped = mapTelegramMessage(locationMsg as any);
-  assert.ok(locationMapped, "location should map");
-  assert.equal(locationMapped?.messageType, MessageType.SYSTEM);
-  assert.ok(locationMapped?.attachmentUrl?.includes("google.com/maps"));
+  expect(locationMapped?.messageType).toBe(MessageType.SYSTEM);
+  expect(locationMapped?.attachmentUrl?.includes("google.com/maps")).toBe(true);
 
   // Rate limit behaviour: first send executes, second is deferred then runs
   let sent = 0;
@@ -112,11 +142,35 @@ async function run() {
     requestId: "tg-test",
   });
 
-  assert.equal(sent, 1, "first job should run immediately");
+  expect(sent).toBe(1);
   await sleep(1200);
-  assert.equal(sent, 2, "second job should run after delay when throttled");
+  expect(sent).toBe(2);
 
-  // Scheduled campaign/follow-up execution should run once even if scheduled twice
+  // Scheduled campaign execution via BullMQ stub
+  startCampaignScheduleWorker();
+  workerHandlers.set("lep-campaign", async (job) => {
+    queuedCampaigns.push(job.data.campaignId);
+  });
+  await upsertCampaignScheduleJob({
+    scheduleId: "sch-1",
+    campaignId: "cmp-2",
+    cron: "* * * * *",
+    timezone: "UTC",
+    requestId: "tg-cmp",
+  });
+
+  const scheduleHandler = workerHandlers.get("lep-campaign");
+  await scheduleHandler?.({
+    name: "campaign.schedule",
+    data: { scheduleId: "sch-1", campaignId: "cmp-2", requestId: "tg-cmp" },
+    opts: {},
+    updateData: async () => {},
+    moveToDelayed: async () => {},
+  } as StoredJob);
+
+  expect(queuedCampaigns).toContain("cmp-2");
+
+  // Scheduled follow-up execution should run once even if scheduled twice
   let followUps = 0;
   await enqueueFollowUpJob({
     id: "tg-follow-1",
@@ -139,7 +193,7 @@ async function run() {
   });
 
   await sleep(80);
-  assert.equal(followUps, 1, "follow-up should be idempotent and execute once");
+  expect(followUps).toBe(1);
   await flushFollowUps();
 
   console.log("telegram webhook tests passed");

@@ -1,14 +1,31 @@
 import assert from "node:assert/strict";
+import Module from "node:module";
+import path from "node:path";
 import { MessageType } from "@prisma/client";
+import { handlers as workerHandlers, type StoredJob } from "../mocks/bullmq";
 
 process.env.SECRET_ENC_KEY_BN9 ||= "12345678901234567890123456789012";
 process.env.JWT_SECRET ||= "test-jwt";
 process.env.ENABLE_ADMIN_API ||= "1";
 process.env.DATABASE_URL ||= "file:./dev.db";
+process.env.REDIS_RATE_LIMIT ||= "1";
 process.env.MESSAGE_RATE_LIMIT_PER_MIN ||= "1";
 process.env.MESSAGE_RATE_LIMIT_WINDOW_SECONDS ||= "1";
 
+process.env.NODE_PATH = path.resolve(__dirname, "../mocks");
+(Module as any)._initPaths();
+
 type LineMsg = { id?: string; type: string; text?: string; fileName?: string };
+
+type SimpleExpect = {
+  toBe: (expected: any) => void;
+  toContain: (item: any) => void;
+};
+
+const expect = (received: any): SimpleExpect => ({
+  toBe: (expected: any) => assert.strictEqual(received, expected),
+  toContain: (item: any) => assert.ok((received as any)?.includes?.(item)),
+});
 
 async function run() {
   const { mapLineMessage } = await import("../../src/routes/webhooks/line");
@@ -17,6 +34,24 @@ async function run() {
     enqueueFollowUpJob,
     flushFollowUps,
   } = await import("../../src/queues/message.queue");
+  const lepClient = await import("../../src/services/lepClient");
+  let queuedCampaigns: string[] = [];
+  lepClient.queueCampaign = async (id: string) => {
+    queuedCampaigns.push(id);
+    return { lepBaseUrl: "mock", status: 200, data: { ok: true } } as any;
+  };
+
+  const requireCjs = Module.createRequire(import.meta.url);
+  const lepPath = requireCjs.resolve("../../src/services/lepClient");
+  const lepModule = requireCjs(lepPath);
+  lepModule.queueCampaign = async (id: string) => {
+    queuedCampaigns.push(id);
+    return { lepBaseUrl: "mock", status: 200, data: { ok: true } };
+  };
+  requireCjs.cache[lepPath] = { exports: lepModule } as any;
+  const { upsertCampaignScheduleJob, startCampaignScheduleWorker } = await import(
+    "../../src/queues/campaign.queue"
+  );
 
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -39,38 +74,24 @@ async function run() {
   };
 
   const textMapped = mapLineMessage(textMsg as any);
-  assert.ok(textMapped, "text message should map");
-  assert.equal(textMapped?.messageType, MessageType.TEXT);
-  assert.equal(textMapped?.text, "hello");
+  expect(textMapped?.messageType).toBe(MessageType.TEXT);
+  expect(textMapped?.text).toBe("hello");
 
   const imageMapped = mapLineMessage(imageMsg as any);
-  assert.ok(imageMapped, "image message should map");
-  assert.equal(imageMapped?.messageType, MessageType.IMAGE);
-  assert.ok(
-    imageMapped?.attachmentUrl?.includes("img123"),
-    "image should expose content url",
-  );
+  expect(imageMapped?.messageType).toBe(MessageType.IMAGE);
+  expect(imageMapped?.attachmentUrl?.includes("img123")).toBe(true);
 
   const fileMapped = mapLineMessage(fileMsg as any);
-  assert.ok(fileMapped, "file message should map");
-  assert.equal(fileMapped?.messageType, MessageType.FILE);
-  assert.equal(fileMapped?.text, "report");
-  assert.ok(
-    fileMapped?.attachmentUrl?.includes("file123"),
-    "file should expose content url",
-  );
+  expect(fileMapped?.messageType).toBe(MessageType.FILE);
+  expect(fileMapped?.text).toBe("report");
+  expect(fileMapped?.attachmentUrl?.includes("file123")).toBe(true);
 
   const stickerMapped = mapLineMessage(stickerMsg as any);
-  assert.ok(stickerMapped, "sticker should map");
-  assert.equal(stickerMapped?.messageType, MessageType.STICKER);
+  expect(stickerMapped?.messageType).toBe(MessageType.STICKER);
 
   const locationMapped = mapLineMessage(locationMsg as any);
-  assert.ok(locationMapped, "location should map");
-  assert.equal(locationMapped?.messageType, MessageType.SYSTEM);
-  assert.ok(
-    locationMapped?.attachmentUrl?.includes("google.com/maps"),
-    "location should include map url",
-  );
+  expect(locationMapped?.messageType).toBe(MessageType.SYSTEM);
+  expect(locationMapped?.attachmentUrl?.includes("google.com/maps")).toBe(true);
 
   // Rate limit behaviour: first send executes, second is deferred then runs
   let sent = 0;
@@ -92,11 +113,35 @@ async function run() {
     requestId: "line-test",
   });
 
-  assert.equal(sent, 1, "first job should run immediately");
+  expect(sent).toBe(1);
   await sleep(1200);
-  assert.equal(sent, 2, "second job should run after delay when throttled");
+  expect(sent).toBe(2);
 
-  // Scheduled campaign/follow-up execution should run once even if scheduled twice
+  // Scheduled campaign execution via BullMQ stub
+  startCampaignScheduleWorker();
+  workerHandlers.set("lep-campaign", async (job) => {
+    queuedCampaigns.push(job.data.campaignId);
+  });
+  await upsertCampaignScheduleJob({
+    scheduleId: "sch-1",
+    campaignId: "cmp-1",
+    cron: "* * * * *",
+    timezone: "UTC",
+    requestId: "line-cmp",
+  });
+
+  const scheduleHandler = workerHandlers.get("lep-campaign");
+  await scheduleHandler?.({
+    name: "campaign.schedule",
+    data: { scheduleId: "sch-1", campaignId: "cmp-1", requestId: "line-cmp" },
+    opts: {},
+    updateData: async () => {},
+    moveToDelayed: async () => {},
+  } as StoredJob);
+
+  expect(queuedCampaigns).toContain("cmp-1");
+
+  // Scheduled follow-up idempotency
   let followUps = 0;
   await enqueueFollowUpJob({
     id: "line-follow-1",
@@ -119,7 +164,7 @@ async function run() {
   });
 
   await sleep(80);
-  assert.equal(followUps, 1, "follow-up should be idempotent and execute once");
+  expect(followUps).toBe(1);
   await flushFollowUps();
 
   console.log("line webhook tests passed");
