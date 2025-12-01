@@ -1,6 +1,7 @@
 // src/services/chat.ts
 import { prisma } from "../lib/prisma";
 import { MessageType } from "@prisma/client";
+import { ensureConversation } from "./conversation";
 
 export type PlatformType = "line" | "telegram" | "facebook" | "web";
 
@@ -41,6 +42,7 @@ export async function upsertChatSessionAndMessages(opts: UpsertChatOptions) {
   });
 
   let sessionId: string;
+  let conversationId: string;
 
   if (existing) {
     // อัปเดต lastMessageAt + displayName ถ้ามี
@@ -67,12 +69,20 @@ export async function upsertChatSessionAndMessages(opts: UpsertChatOptions) {
     sessionId = created.id;
   }
 
+  const conversation = await ensureConversation({
+    botId,
+    tenant,
+    userId,
+  });
+  conversationId = conversation.id;
+
   const messagesData: {
     tenant: string;
     sessionId: string;
     botId: string;
     platform: string;
     userId: string;
+    conversationId: string;
     senderType: string;
     type: MessageType;
     text: string;
@@ -86,6 +96,7 @@ export async function upsertChatSessionAndMessages(opts: UpsertChatOptions) {
       botId,
       platform,
       userId,
+      conversationId,
       senderType: "user",
       type: "TEXT",
       text: userText.trim(),
@@ -100,6 +111,7 @@ export async function upsertChatSessionAndMessages(opts: UpsertChatOptions) {
       botId,
       platform,
       userId,
+      conversationId,
       senderType: "bot",
       type: "TEXT",
       text: botText.trim(),

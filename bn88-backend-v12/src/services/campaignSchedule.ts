@@ -1,4 +1,4 @@
-import { prisma } from "../config/db";
+import { prisma } from "../lib/prisma";
 import { createRequestLogger } from "../utils/logger";
 import { upsertCampaignScheduleJob, removeCampaignScheduleJob } from "../queues/campaign.queue";
 

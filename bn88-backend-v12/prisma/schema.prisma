@@ -80,6 +80,7 @@ model Bot {
   intents       BotIntent[] // ✅ relation ไปยัง Intent
   chatSessions  ChatSession[]
   chatMessages  ChatMessage[]
+  conversations Conversation[]
 
   @@unique([tenant, name], name: "tenant_name")
 }
@@ -317,6 +318,24 @@ model ChatSession {
   @@index([botId, platform, lastMessageAt], map: "ChatSession_list_index")
 }
 
+model Conversation {
+  id     String @id @default(cuid())
+  tenant String
+
+  bot   Bot    @relation(fields: [botId], references: [id])
+  botId String
+
+  userId String
+
+  messages ChatMessage[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([botId, userId], map: "Conversation_botId_userId_unique")
+  @@index([botId, createdAt], map: "Conversation_bot_createdAt")
+}
+
 model ChatMessage {
   id     String @id @default(cuid())
   tenant String
@@ -328,6 +347,9 @@ model ChatMessage {
 
   session   ChatSession @relation(fields: [sessionId], references: [id])
   sessionId String
+
+  conversation   Conversation? @relation(fields: [conversationId], references: [id])
+  conversationId String?
 
   senderType        String // "user" | "bot" | "admin"
   type              MessageType @default(TEXT)
@@ -341,6 +363,7 @@ model ChatMessage {
 
   @@unique([sessionId, platformMessageId], map: "ChatMessage_session_platformMsg_unique")
   @@index([sessionId, createdAt], map: "ChatMessage_bySession")
+  @@index([conversationId, createdAt], map: "ChatMessage_byConversation")
 }
 
 enum MessageType {

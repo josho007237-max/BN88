@@ -43,6 +43,7 @@ export type ActionContext = {
     config?: any;
   };
   session: { id: string };
+  conversation?: { id: string };
   platform: SupportedPlatform;
   userId: string;
   requestId?: string;

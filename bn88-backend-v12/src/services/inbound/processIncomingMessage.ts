@@ -12,6 +12,8 @@ import {
   executeActions,
   safeBroadcast,
 } from "../actions";
+export type { SupportedPlatform } from "../actions";
+import { ensureConversation } from "../conversation";
 
 export type ProcessIncomingParams = {
   botId: string;
@@ -224,6 +226,13 @@ export async function processIncomingMessage(
       },
     });
 
+    const conversation = await ensureConversation({
+      botId: bot.id,
+      tenant: bot.tenant,
+      userId,
+      requestId,
+    });
+
     // 2) กัน duplicate message ด้วย platformMessageId
     if (platformMessageId) {
       const dup = await prisma.chatMessage.findFirst({
@@ -259,6 +268,7 @@ export async function processIncomingMessage(
         botId: bot.id,
         platform,
         sessionId: session.id,
+        conversationId: conversation.id,
         senderType: "user",
         type: incomingType,
         text: safeText || null,
@@ -275,6 +285,7 @@ export async function processIncomingMessage(
         createdAt: true,
         text: true,
         type: true,
+        conversationId: true,
         attachmentUrl: true,
         attachmentMeta: true,
       },
@@ -286,6 +297,7 @@ export async function processIncomingMessage(
       tenant: bot.tenant,
       botId: bot.id,
       sessionId: session.id,
+      conversationId: conversation.id,
       message: {
         id: userChatMessage.id,
         senderType: "user",
@@ -571,6 +583,7 @@ ${intentsForPrompt}
             botId: bot.id,
             platform,
             sessionId: session.id,
+            conversationId: conversation.id,
             senderType: "bot",
             type: "TEXT",
             text: reply,
@@ -589,6 +602,7 @@ ${intentsForPrompt}
             id: true,
             text: true,
             type: true,
+            conversationId: true,
             createdAt: true,
           },
         });
@@ -598,6 +612,7 @@ ${intentsForPrompt}
           tenant: bot.tenant,
           botId: bot.id,
           sessionId: session.id,
+          conversationId: conversation.id,
           message: {
             id: botChatMessage.id,
             senderType: "bot",
@@ -620,6 +635,7 @@ ${intentsForPrompt}
       actionResults = await executeActions(actionsToRun, {
         bot: bot as BotWithRelations,
         session,
+        conversation,
         platform,
         userId,
         requestId,

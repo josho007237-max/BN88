@@ -9,6 +9,7 @@ import { z } from "zod";
 import { recordDeliveryMetric } from "../metrics.live";
 import { createRequestLogger, getRequestId } from "../../utils/logger";
 import { requirePermission } from "../../middleware/basicAuth";
+import { ensureConversation } from "../../services/conversation";
 
 const router = Router();
 const TENANT_DEFAULT = process.env.TENANT_DEFAULT || "bn9";
@@ -283,7 +284,7 @@ router.get(
           ...(botId ? { botId } : {}),
           ...(userId ? { session: { userId } } : {}),
           OR: [
-            { text: { contains: q, mode: "insensitive" } },
+            { text: { contains: q } },
             { attachmentMeta: { path: ["fileName"], string_contains: q } as any },
             { attachmentMeta: { path: ["mimeType"], string_contains: q } as any },
           ],
@@ -404,6 +405,13 @@ router.post(
           .json({ ok: false, message: "bot_not_found_for_session" });
       }
 
+      const conversation = await ensureConversation({
+        botId: bot.id,
+        tenant: session.tenant,
+        userId: session.userId,
+        requestId,
+      });
+
       const platform = session.platform;
       let delivered = false;
 
@@ -477,6 +485,7 @@ router.post(
           botId: session.botId,
           platform: session.platform,
           sessionId: session.id,
+          conversationId: conversation.id,
           senderType: "admin",
           type: messageType,
           text: messageText || null,
@@ -514,6 +523,7 @@ router.post(
           tenant: session.tenant,
           botId: session.botId,
           sessionId: session.id,
+          conversationId: conversation.id,
           message: {
             id: adminMsg.id,
             senderType: "admin",

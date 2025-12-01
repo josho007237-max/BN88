@@ -1,5 +1,6 @@
 // src/services/chatIngest.ts
 import { prisma } from "../lib/prisma";
+import { ensureConversation } from "./conversation";
 
 /**
  * ผลลัพธ์มาตรฐานของการ ingest ข้อความ
@@ -67,6 +68,12 @@ async function ingestInternal(
       },
     });
 
+    const conversation = await ensureConversation({
+      botId: opts.botId,
+      tenant: opts.tenant,
+      userId: opts.userId,
+    });
+
     // 2) สร้าง ChatMessage (ต้องใส่ botId + platform ให้ครบตาม schema)
     const msg = await prisma.chatMessage.create({
       data: {
@@ -74,6 +81,7 @@ async function ingestInternal(
         botId: opts.botId,
         platform: opts.platform,
         sessionId: session.id,
+        conversationId: conversation.id,
         senderType: opts.senderType,
         type: "TEXT",
         text: opts.text,
