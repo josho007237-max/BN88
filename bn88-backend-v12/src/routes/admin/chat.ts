@@ -8,6 +8,7 @@ import { MessageType } from "@prisma/client";
 import { z } from "zod";
 import { recordDeliveryMetric } from "../metrics.live";
 import { createRequestLogger, getRequestId } from "../../utils/logger";
+import { requirePermission } from "../../middleware/basicAuth";
 
 const router = Router();
 const TENANT_DEFAULT = process.env.TENANT_DEFAULT || "bn9";
@@ -214,7 +215,10 @@ async function sendTelegramRich(
 /* GET /api/admin/chat/sessions                                       */
 /* ------------------------------------------------------------------ */
 
-router.get("/sessions", async (req: Request, res: Response) => {
+router.get(
+  "/sessions",
+  requirePermission(["chat:read"]),
+  async (req: Request, res: Response) => {
   try {
     const tenant = getTenant(req);
     const botId =
@@ -250,6 +254,7 @@ router.get("/sessions", async (req: Request, res: Response) => {
 
 router.get(
   "/sessions/:id/messages",
+  requirePermission(["chat:read"]),
   async (req: Request, res: Response): Promise<Response> => {
     try {
       const tenant = getTenant(req);
@@ -288,6 +293,7 @@ router.get(
 
 router.post(
   "/sessions/:id/reply",
+  requirePermission(["chat:send"]),
   async (req: Request, res: Response): Promise<Response> => {
     try {
       const requestId = getRequestId(req);

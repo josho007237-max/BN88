@@ -254,6 +254,19 @@ export type LepCampaignSchedule = {
   updatedAt?: string;
 };
 
+export type RoleItem = {
+  id: string;
+  name: string;
+  description?: string | null;
+  permissions?: string[];
+};
+
+export type AdminUserItem = {
+  id: string;
+  email: string;
+  roles: RoleItem[];
+};
+
 
 /* ================================ Base ================================ */
 
@@ -438,6 +451,31 @@ export async function updateBotSecrets(
     await API.post<BotSecretsSaveResponse>(
       `/admin/bots/${encodeURIComponent(botId)}/secrets`,
       body
+    )
+  ).data;
+}
+
+/* ----- Roles & Admin users ----- */
+
+export async function listRoles() {
+  const res = await API.get<{ ok: boolean; items: RoleItem[] }>(
+    "/admin/roles"
+  );
+  return res.data.items ?? [];
+}
+
+export async function listAdminUsersWithRoles() {
+  const res = await API.get<{ ok: boolean; items: AdminUserItem[] }>(
+    "/admin/roles/admin-users"
+  );
+  return res.data.items ?? [];
+}
+
+export async function assignRole(adminId: string, roleId: string) {
+  return (
+    await API.post<{ ok: boolean; adminId: string; roleId: string }>(
+      "/admin/roles/assign",
+      { adminId, roleId }
     )
   ).data;
 }

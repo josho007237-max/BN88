@@ -46,6 +46,7 @@ import knowledgeAdmin from "./routes/admin/ai/knowledge";
 import adminPersonaRoutes from "./routes/admin/personas";
 import { chatAdminRouter } from "./routes/admin/chat";
 import lepAdminRouter from "./routes/admin/lep";
+import adminRolesRouter from "./routes/admin/roles";
 
 /* Dev & tools */
 import devRoutes from "./routes/dev";
@@ -182,6 +183,7 @@ if (config.ENABLE_ADMIN_API === "1") {
   app.use("/api/admin/bots", authGuard, adminBotIntentsRouter);
   app.use("/api/admin/chat", authGuard, chatAdminRouter);
   app.use("/api/admin/lep", authGuard, lepAdminRouter);
+  app.use("/api/admin/roles", authGuard, adminRolesRouter);
 
   app.use("/api/admin", authGuard, adminRouter);
   app.use("/api/admin/ai/presets", authGuard, presetsAdmin);
