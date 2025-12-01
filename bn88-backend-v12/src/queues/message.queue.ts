@@ -168,18 +168,15 @@ type RateLimitedJob = {
   channelId: string; // channel/bot id to rate-limit
   handler: () => Promise<any>;
   requestId?: string;
+  backoffBaseMs?: number;
 };
 
-const rateLimitTimers = new Map<string, NodeJS.Timeout>();
-
-// -----------------------------
-// BullMQ queue for scheduled sends
-// -----------------------------
 type ScheduledMessageJob = RateLimitedJob & {
   cron?: string;
   timezone?: string;
   delayMs?: number;
   handlerKey: string;
+  attempt?: number;
 };
 
 const messageQueue = new Queue<ScheduledMessageJob>("message-dispatch", {
@@ -190,6 +187,11 @@ const handlerRegistry = new Map<string, () => Promise<any>>();
 
 let messageWorkerStarted = false;
 
+function getBackoffDelayMs(base: number, attempt: number, fallback: number) {
+  const multiplier = Math.pow(2, Math.max(0, attempt - 1));
+  return Math.max(fallback, base * multiplier);
+}
+
 export function startMessageWorker() {
   if (messageWorkerStarted) return;
   messageWorkerStarted = true;
@@ -199,16 +201,25 @@ export function startMessageWorker() {
     async (job) => {
       const log = createRequestLogger(job.data.requestId || job.id);
       log.info("[message.queue] firing job", { id: job.id, channelId: job.data.channelId });
+
       const check = await consumeRateLimit(job.data.channelId, job.data.requestId);
       if (!check.allowed) {
+        const attempt = (job.data.attempt || 0) + 1;
+        const backoffMs = getBackoffDelayMs(
+          job.data.backoffBaseMs || 1000,
+          attempt,
+          check.delayMs || 1000,
+        );
         log.warn("[message.queue] rate-limit hit, rescheduling", {
-          delayMs: check.delayMs,
+          delayMs: backoffMs,
           channelId: job.data.channelId,
+          attempt,
         });
-        await job.updateData(job.data);
-        await job.moveToDelayed(Date.now() + (check.delayMs || 1000));
+        await job.updateData({ ...job.data, attempt });
+        await job.moveToDelayed(Date.now() + backoffMs);
         return;
       }
+
       const handler = handlerRegistry.get(job.data.handlerKey);
       if (handler) {
         await handler();
@@ -257,45 +268,30 @@ export async function enqueueRateLimitedSend(job: RateLimitedJob): Promise<{
   delayMs?: number;
   result?: any;
 }> {
+  startMessageWorker();
   const log = createRequestLogger(job.requestId);
+  handlerRegistry.set(job.id, job.handler);
 
-  const run = async (): Promise<{ scheduled: boolean; delayMs?: number; result?: any }> => {
-    const check = await consumeRateLimit(job.channelId, job.requestId);
-
-    if (check.allowed) {
-      rateLimitTimers.delete(job.id);
-      try {
-        const result = await job.handler();
-        return { scheduled: false, result };
-      } catch (err) {
-        log.error("[rate-limit] handler error", err);
-        throw err;
-      }
-    }
-
-    const delayMs = check.delayMs || 1000;
-    if (!rateLimitTimers.has(job.id)) {
-      const timer = setTimeout(() => {
-        run().catch((err) => log.error("[rate-limit] delayed send error", err));
-      }, delayMs);
-      rateLimitTimers.set(job.id, timer);
-      log.warn("[rate-limit] throttled, scheduled", {
+  try {
+    await messageQueue.add(
+      "message.rate", 
+      { ...job, handlerKey: job.id, attempt: 0 },
+      {
         jobId: job.id,
-        channelId: job.channelId,
-        delayMs,
-        count: check.count,
-      });
-    } else {
-      log.info("[rate-limit] already queued", {
-        jobId: job.id,
-        channelId: job.channelId,
-      });
+        removeOnComplete: true,
+        removeOnFail: true,
+      },
+    );
+    log.info("[rate-limit] enqueued", { jobId: job.id, channelId: job.channelId });
+    return { scheduled: true };
+  } catch (err: any) {
+    if (err?.message?.includes("jobId")) {
+      log.info("[rate-limit] job already enqueued", { jobId: job.id });
+      return { scheduled: true };
     }
-
-    return { scheduled: true, delayMs };
-  };
-
-  return run();
+    log.error("[rate-limit] enqueue error", err);
+    throw err;
+  }
 }
 
 export async function scheduleMessageJob(options: {
@@ -307,6 +303,7 @@ export async function scheduleMessageJob(options: {
   delayMs?: number;
   requestId?: string;
 }) {
+  startMessageWorker();
   const log = createRequestLogger(options.requestId);
   handlerRegistry.set(options.id, options.handler);
   const repeat: JobsOptions["repeat"] | undefined = options.cron

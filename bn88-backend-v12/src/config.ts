@@ -33,6 +33,7 @@ const EnvSchema = z.object({
 
   // Messaging / rate limit
   REDIS_URL: z.string().default("redis://127.0.0.1:6379"),
+  REDIS_RATE_LIMIT: z.coerce.number().int().positive().default(60),
   MESSAGE_RATE_LIMIT_PER_MIN: z.coerce.number().int().positive().default(60),
   MESSAGE_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().positive().default(90),
 });
@@ -76,7 +77,7 @@ export const config = {
 
   // Messaging / rate limit
   REDIS_URL: env.REDIS_URL,
-  MESSAGE_RATE_LIMIT_PER_MIN: env.MESSAGE_RATE_LIMIT_PER_MIN,
+  MESSAGE_RATE_LIMIT_PER_MIN: env.REDIS_RATE_LIMIT || env.MESSAGE_RATE_LIMIT_PER_MIN,
   MESSAGE_RATE_LIMIT_WINDOW_SECONDS: env.MESSAGE_RATE_LIMIT_WINDOW_SECONDS,
 
   isProd: env.NODE_ENV === "production",
