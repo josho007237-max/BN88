@@ -7,8 +7,11 @@ import {
   type SupportedPlatform,
 } from "../../services/inbound/processIncomingMessage";
 import { sendTelegramMessage } from "../../services/telegram";
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
 import { MessageType } from "@prisma/client";
 import { createRequestLogger, getRequestId } from "../../utils/logger";
+
+ main
 
 const router = Router();
 
@@ -303,7 +306,11 @@ router.post("/", async (req: Request, res: Response) => {
         msg.message_id
       );
     } else {
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
       log.warn("[TELEGRAM] skip send (no reply or no botToken)", {
+
+      console.warn("[TELEGRAM] skip send (no reply or no botToken)", {
+ main
         hasReply,
         hasBotToken,
       });

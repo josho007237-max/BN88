@@ -20,6 +20,8 @@ import lineWebhookRouter from "./webhooks/line";
 
 // admin chat (ไฟล์ใหม่ของเรา)
 import { chatAdminRouter } from "./admin/chat";
+// admin LEP (ไฟล์ใหม่สำหรับเชื่อม LEP)
+import { lepAdminRouter } from "./admin/lep";
 
 export const router = Router();
 
@@ -27,11 +29,8 @@ export const router = Router();
 
 function pickRouter(mod: any): any {
   if (!mod) return undefined;
-  // ถ้า module default เป็นฟังก์ชัน middleware/Router
   if (typeof mod.default === "function") return mod.default;
-  // ถ้า module เองเป็นฟังก์ชัน
   if (typeof mod === "function") return mod;
-  // เผื่อ export ชื่อ router / xxxRouter
   if (mod.router && typeof mod.router === "function") return mod.router;
   if (mod.eventsRouter && typeof mod.eventsRouter === "function")
     return mod.eventsRouter;
@@ -77,5 +76,8 @@ if (adminBotsRouter) {
 
 // admin/chat: router ใหม่ที่เราเขียนเอง
 router.use("/admin/chat", chatAdminRouter);
+
+// admin/lep: router สำหรับเชื่อม line-engagement-platform
+router.use("/admin/lep", lepAdminRouter);
 
 export default router;

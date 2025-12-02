@@ -289,6 +289,44 @@ export type AdminUserItem = {
   roles: RoleItem[];
 };
 
+/* ---- Knowledge types ---- */
+
+export type KnowledgeDoc = {
+  id: string;
+  tenant: string;
+  title: string;
+  tags?: string | null;
+  body: string;
+  status: string;
+  createdAt?: string;
+  updatedAt?: string;
+  _count?: { chunks: number; bots: number };
+};
+
+export type KnowledgeDocDetail = KnowledgeDoc & {
+  bots?: { botId: string; docId: string; bot?: BotItem }[];
+};
+
+export type KnowledgeChunk = {
+  id: string;
+  tenant: string;
+  docId: string;
+  content: string;
+  embedding?: unknown;
+  tokens: number;
+  createdAt: string;
+  updatedAt?: string;
+};
+
+export type KnowledgeListResponse = {
+  ok: boolean;
+  items: KnowledgeDoc[];
+  page: number;
+  limit: number;
+  total: number;
+  pages: number;
+};
+
 
 /* ================================ Base ================================ */
 
@@ -663,8 +701,12 @@ export async function getChatMessages(
     { params: { limit } }
   );
   const data = res.data as any;
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
   const items: ChatMessage[] = data.items ?? data.messages ?? [];
   return items.map(normalizeChatMessage);
+
+  return data.items ?? data.messages ?? [];
+ main
 }
 
 // ตำแหน่งเดิมที่คุณเขียน replyChatSession เอาออกไปเลย แล้วแทนด้วยโค้ดนี้
@@ -692,6 +734,7 @@ export async function replyChatSession(
   return res.data;
 }
 
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
 export type RichMessagePayload = {
   sessionId: string;
   platform?: string;
@@ -735,6 +778,8 @@ export async function searchChatMessages(params: {
   return items.map(normalizeChatMessage);
 }
 
+
+ main
 /* ============================== Knowledge APIs ============================== */
 
 export async function listKnowledgeDocs(params?: {
@@ -850,6 +895,7 @@ export async function removeBotKnowledge(botId: string, docId: string) {
   return { ok: true as const };
 }
 
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
 /* ============================== LEP Admin Proxy ============================== */
 
 export async function lepHealth() {
@@ -935,6 +981,8 @@ export async function lepDeleteCampaignSchedule(campaignId: string, scheduleId: 
   ).data as any;
 }
 
+
+ main
 
 /* ============================= Helper bundle ============================ */
 

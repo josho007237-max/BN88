@@ -2,14 +2,21 @@ import { Worker } from 'bullmq';
 import { LineMessaging } from '../services/lineMessaging.service';
 import { CampaignRepo } from '../repositories/campaign.repo';
 import { env } from '../config/env';
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
 import { log } from '../utils/logger';
+
+ main
 
 const connection = {
   host: env.REDIS_HOST,
   port: env.REDIS_PORT,
 };
 
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
 export const startMessageProcessor = () => {
+
+export const startProcessor = () => {
+main
   const worker = new Worker(
     'messages',
     async job => {
@@ -44,15 +51,24 @@ export const startMessageProcessor = () => {
   );
 
   worker.on('completed', job => {
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
     log('Message job completed', { id: job.id });
   });
 
   worker.on('failed', (job, err) => {
     console.error('Message job failed', job?.id, err?.message || err);
+
+    console.log('Job completed', job.id);
+  });
+
+  worker.on('failed', (job, err) => {
+    console.error('Job failed', job?.id, err?.message || err);
+ main
   });
 
   return worker;
 };
+codex/analyze-bn88-project-structure-and-workflow-s9ghbu
 
 export const startCampaignProcessor = () => {
   const worker = new Worker(
@@ -107,3 +123,5 @@ export const startAllProcessors = () => {
 
   return [messageWorker, campaignWorker];
 };
+
+ main

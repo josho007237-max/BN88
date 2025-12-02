@@ -1,10 +1,14 @@
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
 version: "3.8"
 
+
+main
 services:
   app:
     build:
       context: .
       dockerfile: Dockerfile
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
     image: line-engagement-app:latest
     env_file:
       - .env
@@ -15,10 +19,25 @@ services:
     depends_on:
       - postgres
       - redis
+
+    image: line-engagement-app:latest   # สร้าง image ชื่อเดียวนี้
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+    ports:
+      - "8080:8080"                     # เปิด HTTP port ให้เรียก /health ได้
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+main
     networks:
       - backend
 
   worker:
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
     build:
       context: .
       dockerfile: Dockerfile
@@ -31,6 +50,19 @@ services:
     depends_on:
       - postgres
       - redis
+
+    image: line-engagement-app:latest   # ใช้ image เดียวกับ app (ไม่ต้อง build ซ้ำ)
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+    command: ["node", "dist/workers/worker.js"]  # รัน worker จากไฟล์นี้
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+ main
     networks:
       - backend
 

@@ -35,23 +35,35 @@ model Campaign {
   id            String    @id @default(cuid())
   externalId    String?   @unique
   name          String
+codex/analyze-bn88-project-structure-and-workflow-s9ghbu
   message       String
   status        String    @default("draft")
   totalTargets  Int?
   sentCount     Int       @default(0)
   failedCount   Int       @default(0)
+
+ main
   scheduleStart DateTime? @db.Timestamptz
   scheduleEnd   DateTime? @db.Timestamptz
   cron          String?
   enabled       Boolean   @default(true)
+codex/analyze-bn88-project-structure-and-workflow-s9ghbu
   segmentType   String?
   segmentQuery  Json?
   messagePayload Json?
+
+  segmentType   String
+  segmentQuery  Json
+  message       Json
+main
   createdAt     DateTime  @default(now()) @db.Timestamptz
   updatedAt     DateTime  @updatedAt @db.Timestamptz
 
   deliveries    CampaignDelivery[]
+codex/analyze-bn88-project-structure-and-workflow-s9ghbu
   schedules     CampaignSchedule[]
+
+main
 }
 
 model CampaignDelivery {
@@ -68,6 +80,7 @@ model CampaignDelivery {
   @@index([campaignId])
   @@index([audienceId])
 }
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
 
 model CampaignSchedule {
   id             String    @id @default(cuid())
@@ -86,3 +99,5 @@ model CampaignSchedule {
 
   @@index([campaignId])
 }
+
+ main

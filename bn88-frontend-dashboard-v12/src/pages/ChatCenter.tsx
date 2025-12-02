@@ -6,6 +6,8 @@ import React, {
   useMemo,
   useCallback,
 } from "react";
+
+codex/analyze-bn88-project-structure-and-workflow-s9ghbu
 import toast from "react-hot-toast";
 import {
   Bar,
@@ -16,6 +18,8 @@ import {
   XAxis,
   YAxis,
 } from "recharts";
+
+ main
 import {
   type BotItem,
   type ChatSession,
@@ -26,8 +30,11 @@ import {
   getChatMessages,
   replyChatSession,
   getApiBase,
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
   searchChatMessages,
   sendRichMessage,
+
+ main
 } from "../lib/api";
 
 const POLL_INTERVAL_MS = 3000; // 3 วินาที
@@ -148,6 +155,9 @@ const ChatCenter: React.FC = () => {
   const [sendingRich, setSendingRich] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
+
+  const tenant = import.meta.env.VITE_TENANT || "bn9";
+  const apiBase = getApiBase();
 
   const tenant = import.meta.env.VITE_TENANT || "bn9";
   const apiBase = getApiBase();
@@ -293,6 +303,53 @@ const ChatCenter: React.FC = () => {
       window.clearInterval(timer);
     };
   }, [selectedBotId, selectedSession?.id, fetchSessions, fetchMessages]);
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
+
+
+  /* ------------------- SSE: รับข้อความใหม่แบบ realtime ------------------- */
+
+  useEffect(() => {
+    if (!selectedBotId) return;
+
+    const url = `${apiBase}/events?tenant=${encodeURIComponent(tenant)}`;
+    const es = new EventSource(url);
+
+    const handleNewMessage = (ev: MessageEvent) => {
+      try {
+        const payload = JSON.parse(ev.data || "{}") as any;
+        if (!payload || payload.botId !== selectedBotId) return;
+        const sessionId = payload.sessionId as string | undefined;
+
+        void (async () => {
+          const nextSession = await fetchSessions(
+            selectedBotId,
+            sessionId || selectedSession?.id || undefined
+          );
+          const targetSessionId =
+            sessionId || selectedSession?.id || nextSession?.id || null;
+          if (targetSessionId) {
+            await fetchMessages(targetSessionId);
+          }
+        })();
+      } catch (err) {
+        console.warn("[ChatCenter SSE parse error]", err);
+      }
+    };
+
+    es.addEventListener("chat:message:new", handleNewMessage);
+
+    return () => {
+      es.removeEventListener("chat:message:new", handleNewMessage as any);
+      try {
+        es.close();
+      } catch (e) {
+        console.warn("[ChatCenter SSE close warn]", e);
+      }
+    };
+  }, [selectedBotId, tenant, apiBase, fetchSessions, fetchMessages, selectedSession?.id]);
+
+  /* ---------------- scroll ลงล่างเมื่อมีข้อความใหม่ ---------------- */
+ main
 
   useEffect(() => {
     if (selectedSession?.platform) {
@@ -1272,6 +1329,7 @@ const ChatCenter: React.FC = () => {
               const msgIntentCode = getMessageIntentCode(m);
               const msgIntentLabel = intentCodeToLabel(msgIntentCode);
               const messagePlatform = platformLabel(
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
                 m.platform || m.session?.platform || selectedSession?.platform
               );
               const sessionLabel = isSearchMode
@@ -1280,6 +1338,10 @@ const ChatCenter: React.FC = () => {
                   m.session?.id ||
                   ""
                 : null;
+
+                m.platform || selectedSession?.platform
+              );
+ main
 
               return (
                 <React.Fragment key={m.id}>
@@ -1316,7 +1378,10 @@ const ChatCenter: React.FC = () => {
                         <span className="ml-auto text-right">
                           {new Date(m.createdAt).toLocaleTimeString()}
                         </span>
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
                       </div>
+
+ main
                       </div>
                     </div>
                   </div>

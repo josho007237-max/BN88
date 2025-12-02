@@ -1,4 +1,8 @@
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
 import { Queue, JobsOptions } from 'bullmq';
+
+import { Queue } from 'bullmq';
+ main
 import { env } from '../config/env';
 
 const connection = {
@@ -8,6 +12,7 @@ const connection = {
 
 export const messageQueue = new Queue('messages', { connection });
 
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
 const baseOptions = (payload: { attempts?: number } = {}): JobsOptions => ({
   attempts: payload.attempts ?? 3,
   backoff: { type: 'exponential', delay: 5000 },
@@ -15,12 +20,15 @@ const baseOptions = (payload: { attempts?: number } = {}): JobsOptions => ({
   removeOnFail: 1000,
 });
 
+
+ main
 export const enqueueMessage = async (payload: {
   to: string;
   messages: any[];
   campaignId?: string;
   audienceId?: string;
   attempts?: number;
+codex/analyze-bn88-project-structure-and-workflow-s9ghbu
   idempotencyKey?: string;
 }) => {
   return messageQueue.add('send', payload, {
@@ -45,5 +53,13 @@ export const scheduleMessage = async (payload: {
       pattern: payload.cron,
       tz: payload.timezone,
     },
+
+}) => {
+  return messageQueue.add('send', payload, {
+    attempts: payload.attempts ?? 3,
+    backoff: { type: 'exponential', delay: 5000 },
+    removeOnComplete: 1000,
+    removeOnFail: 1000,
+ main
   });
 };

@@ -406,6 +406,7 @@ router.get(
         take: limit,
       });
 
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
       return res.json({ ok: true, sessions, items: sessions });
     } catch (err) {
       console.error("[admin chat] list sessions error", err);
@@ -413,6 +414,14 @@ router.get(
         .status(500)
         .json({ ok: false, message: "internal_error_list_sessions" });
     }
+
+    return res.json({ ok: true, sessions, items: sessions });
+  } catch (err) {
+    console.error("[admin chat] list sessions error", err);
+    return res
+      .status(500)
+      .json({ ok: false, message: "internal_error_list_sessions" });
+ main
   }
 );
 

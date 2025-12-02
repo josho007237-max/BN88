@@ -7,21 +7,30 @@ export const CampaignRepo = {
     scheduleEnd?: string;
     cron?: string;
     enabled?: boolean;
+codex/analyze-bn88-project-structure-and-workflow-s9ghbu
     segmentType?: string;
     segmentQuery?: any;
+
+    segmentType: string;
+    segmentQuery: any;
+ main
     message: any;
   }) =>
     prisma.campaign.create({
       data: {
         name: data.name,
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
         message: typeof data.message === 'string' ? data.message : JSON.stringify(data.message),
         messagePayload: data.message,
+
+main
         scheduleStart: data.scheduleStart ? new Date(data.scheduleStart) : undefined,
         scheduleEnd: data.scheduleEnd ? new Date(data.scheduleEnd) : undefined,
         cron: data.cron,
         enabled: data.enabled ?? true,
         segmentType: data.segmentType,
         segmentQuery: data.segmentQuery,
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
       },
     }),
 
@@ -32,6 +41,9 @@ export const CampaignRepo = {
         message: data.message,
         totalTargets: data.totalTargets,
         status: 'draft',
+
+        message: data.message,
+ main
       },
     }),
 
@@ -40,6 +52,7 @@ export const CampaignRepo = {
       orderBy: { createdAt: 'desc' },
     }),
 
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
   listPaginated: async (page: number, pageSize: number) => {
     const [items, total] = await Promise.all([
       prisma.campaign.findMany({
@@ -53,6 +66,8 @@ export const CampaignRepo = {
     return { items, total };
   },
 
+
+ main
   get: async (id: string) =>
     prisma.campaign.findUnique({
       where: { id },
@@ -68,6 +83,7 @@ export const CampaignRepo = {
     prisma.campaignDelivery.create({
       data: { campaignId, audienceId, status, sentAt, error },
     }),
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
 
   setStatus: async (id: string, status: string) =>
     prisma.campaign.update({
@@ -133,4 +149,6 @@ export const CampaignRepo = {
 
   getSchedule: async (scheduleId: string) =>
     prisma.campaignSchedule.findUnique({ where: { id: scheduleId } }),
+
+ main
 };
