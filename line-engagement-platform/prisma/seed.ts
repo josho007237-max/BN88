@@ -32,7 +32,13 @@ async function run() {
       enabled: true,
       segmentType: 'tag',
       segmentQuery: { type: 'tag', tags: ['logged_in'] },
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
+      message: 'ส่วนลดสำหรับสมาชิกที่ล็อกอินแล้ว 🎁',
+      messagePayload: { type: 'text', text: 'ส่วนลดสำหรับสมาชิกที่ล็อกอินแล้ว 🎁' },
+      status: 'draft',
+
       message: { type: 'text', text: 'ส่วนลดสำหรับสมาชิกที่ล็อกอินแล้ว 🎁' },
+ main
     },
   });
 

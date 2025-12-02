@@ -2,34 +2,45 @@
 
 import { prisma } from "../../lib/prisma";
 import { getOpenAIClientForBot } from "../openai/getOpenAIClientForBot";
-import { sseHub } from "../../lib/sseHub";
-
-export type SupportedPlatform = "line" | "telegram" | "facebook";
+import { MessageType } from "@prisma/client";
+import { createRequestLogger } from "../../utils/logger";
+import {
+  ActionExecutionResult,
+  ActionItem,
+  normalizeActionMessage,
+  SupportedPlatform,
+  executeActions,
+  safeBroadcast,
+} from "../actions";
+export type { SupportedPlatform } from "../actions";
+import { ensureConversation } from "../conversation";
 
 export type ProcessIncomingParams = {
   botId: string;
   platform: SupportedPlatform;
   userId: string;
   text: string;
+  messageType?: MessageType;
+  attachmentUrl?: string | null;
+  attachmentMeta?: unknown;
 
-  // สำหรับ LINE/Telegram/Facebook ใช้กัน duplicate + log meta
   displayName?: string;
   platformMessageId?: string;
   rawPayload?: unknown;
+  requestId?: string;
 };
 
 export type ProcessIncomingResult = {
   reply: string;
   intent: string;
   isIssue: boolean;
+  actions?: ActionExecutionResult[];
 };
 
-// Bot + relations ที่ pipeline นี้ต้องใช้
 type BotWithRelations = NonNullable<
   Awaited<ReturnType<typeof loadBotWithRelations>>
 >;
 
-// โหลด bot + secret + config + intents (และ preset ถ้าต้องใช้)
 async function loadBotWithRelations(botId: string) {
   if (!botId) return null;
 
@@ -141,15 +152,6 @@ function todayKey(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function safeBroadcast(event: any) {
-  try {
-    // ตรงนี้อิงสัญญาเดิมว่า sseHub มีเมธอด broadcast(event)
-    (sseHub as any).broadcast?.(event);
-  } catch (err) {
-    console.warn("[inbound] SSE broadcast error", err);
-  }
-}
-
 export async function processIncomingMessage(
   params: ProcessIncomingParams
 ): Promise<ProcessIncomingResult> {
@@ -161,7 +163,10 @@ export async function processIncomingMessage(
     displayName,
     platformMessageId,
     rawPayload,
+    requestId,
   } = params;
+
+  const log = createRequestLogger(requestId);
 
   // ถ้าข้อความว่าง ให้ตอบ fallback เลย (กันเคสส่งมาเป็น empty)
   if (!text || !text.trim()) {
@@ -169,6 +174,7 @@ export async function processIncomingMessage(
       reply: "ขออภัยค่ะ ระบบขัดข้องชั่วคราว ลองใหม่อีกครั้งภายหลังนะคะ",
       intent: "other",
       isIssue: false,
+      actions: [],
     };
   }
 
@@ -177,7 +183,11 @@ export async function processIncomingMessage(
     reply: "ขออภัยค่ะ ระบบขัดข้องชั่วคราว ลองใหม่อีกครั้งภายหลังนะคะ",
     intent: "other",
     isIssue: false,
+    actions: [],
   };
+
+  let actionResults: ActionExecutionResult[] = [];
+  let aiActions: ActionItem[] = [];
 
   try {
     const bot = await loadBotWithRelations(botId);
@@ -216,6 +226,14 @@ export async function processIncomingMessage(
       },
     });
 
+    const conversation = await ensureConversation({
+      botId: bot.id,
+      tenant: bot.tenant,
+      userId,
+      platform,
+      requestId,
+    });
+
     // 2) กัน duplicate message ด้วย platformMessageId
     if (platformMessageId) {
       const dup = await prisma.chatMessage.findFirst({
@@ -241,6 +259,9 @@ export async function processIncomingMessage(
       }
     }
 
+    const incomingType: MessageType = params.messageType ?? "TEXT";
+    const safeText = text?.trim() || (incomingType !== "TEXT" ? `[${incomingType.toLowerCase()}]` : "");
+
     // 3) บันทึกข้อความฝั่ง user → ChatMessage
     const userChatMessage = await prisma.chatMessage.create({
       data: {
@@ -248,9 +269,12 @@ export async function processIncomingMessage(
         botId: bot.id,
         platform,
         sessionId: session.id,
+        conversationId: conversation.id,
         senderType: "user",
-        messageType: "text",
-        text,
+        type: incomingType,
+        text: safeText,
+        attachmentUrl: params.attachmentUrl ?? null,
+        attachmentMeta: params.attachmentMeta ?? undefined,
         platformMessageId: platformMessageId ?? null,
         meta: {
           source: platform,
@@ -261,6 +285,10 @@ export async function processIncomingMessage(
         id: true,
         createdAt: true,
         text: true,
+        type: true,
+        conversationId: true,
+        attachmentUrl: true,
+        attachmentMeta: true,
       },
     });
 
@@ -270,13 +298,22 @@ export async function processIncomingMessage(
       tenant: bot.tenant,
       botId: bot.id,
       sessionId: session.id,
+      conversationId: conversation.id,
       message: {
         id: userChatMessage.id,
         senderType: "user",
         text: userChatMessage.text,
+        type: userChatMessage.type,
+        attachmentUrl: userChatMessage.attachmentUrl,
+        attachmentMeta: userChatMessage.attachmentMeta,
         createdAt: userChatMessage.createdAt,
       },
     });
+
+    // ถ้าไม่ใช่ข้อความ text ให้หยุดที่นี่ (ไม่ต้องเรียก AI)
+    if (incomingType !== "TEXT") {
+      return { reply: "", intent: "non_text", isIssue: false, actions: [] };
+    }
 
     // 4) เตรียม client OpenAI ตาม secret/config ของบอท
     let openai;
@@ -390,6 +427,7 @@ ${intentsForPrompt}
       reply: "ขอบคุณสำหรับข้อมูลค่ะ",
       intent: "other",
       isIssue: false,
+      actions: [],
     };
 
     try {
@@ -402,7 +440,10 @@ ${intentsForPrompt}
             : "ขอบคุณสำหรับข้อมูลค่ะ",
         intent: typeof json.intent === "string" ? json.intent : "other",
         isIssue: Boolean(json.isIssue),
+        actions: [],
       };
+
+      aiActions = Array.isArray(json.actions) ? (json.actions as ActionItem[]) : [];
     } catch (err) {
       console.error(
         "[processIncomingMessage] JSON parse error from GPT",
@@ -543,8 +584,9 @@ ${intentsForPrompt}
             botId: bot.id,
             platform,
             sessionId: session.id,
+            conversationId: conversation.id,
             senderType: "bot",
-            messageType: "text",
+            type: "TEXT",
             text: reply,
             meta: {
               source: platform,
@@ -560,6 +602,8 @@ ${intentsForPrompt}
           select: {
             id: true,
             text: true,
+            type: true,
+            conversationId: true,
             createdAt: true,
           },
         });
@@ -569,10 +613,12 @@ ${intentsForPrompt}
           tenant: bot.tenant,
           botId: bot.id,
           sessionId: session.id,
+          conversationId: conversation.id,
           message: {
             id: botChatMessage.id,
             senderType: "bot",
             text: botChatMessage.text,
+            type: botChatMessage.type,
             createdAt: botChatMessage.createdAt,
           },
         });
@@ -584,13 +630,27 @@ ${intentsForPrompt}
       }
     }
 
-    return { reply, intent, isIssue };
+    const actionsToRun = aiActions;
+
+    if (actionsToRun.length > 0) {
+      actionResults = await executeActions(actionsToRun, {
+        bot: bot as BotWithRelations,
+        session,
+        conversation,
+        platform,
+        userId,
+        requestId,
+        log,
+      });
+    }
+
+    return { reply, intent, isIssue, actions: actionResults };
   } catch (err) {
     console.error(
       "[processIncomingMessage] fatal error",
       (err as any)?.message ?? err
     );
     // อย่าโยน error ออกไป ให้ส่ง fallback กลับ
-    return fallback;
+    return { ...fallback, actions: actionResults };
   }
 }

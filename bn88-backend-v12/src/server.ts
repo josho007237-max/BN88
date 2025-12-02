@@ -21,6 +21,10 @@ import { config } from "./config";
 import { logger } from "./mw/logger";
 import { authGuard } from "./mw/auth";
 import { sseHandler } from "./live";
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
+import { metricsSseHandler, metricsStreamHandler } from "./routes/metrics.live";
+
+ main
 import { events } from "./routes/events";
 
 /* Core routes */
@@ -44,6 +48,10 @@ import presetsAdmin from "./routes/admin/ai/presets";
 import knowledgeAdmin from "./routes/admin/ai/knowledge";
 import adminPersonaRoutes from "./routes/admin/personas";
 import { chatAdminRouter } from "./routes/admin/chat";
+import lepAdminRouter from "./routes/admin/lep";
+import adminRolesRouter from "./routes/admin/roles";
+import { startCampaignScheduleWorker } from "./queues/campaign.queue";
+import { startMessageWorker } from "./queues/message.queue";
 
 /* Dev & tools */
 import devRoutes from "./routes/dev";
@@ -56,6 +64,10 @@ import { getLepHealth } from "./services/lepClient";
 const app = express();
 app.set("trust proxy", 1);
 
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
+startCampaignScheduleWorker();
+startMessageWorker();
+
 /* root health (ไม่ขึ้นกับ /api) */
 app.get("/health", (req, res) => {
   res.json({
@@ -63,6 +75,7 @@ app.get("/health", (req, res) => {
     service: "bn88-backend",
   });
 });
+ main
 
 /* ---------- Body parsers ---------- */
 
@@ -197,6 +210,8 @@ app.use("/api/ai/answer", aiAnswerRoute);
 /* Realtime */
 
 app.get("/api/live/:tenant", sseHandler);
+app.get("/api/live/metrics", metricsSseHandler);
+app.get("/metrics/stream", metricsStreamHandler);
 
 /* Webhooks */
 
@@ -212,6 +227,8 @@ if (config.ENABLE_ADMIN_API === "1") {
   app.use("/api/admin/bots", authGuard, adminBotsRouter);
   app.use("/api/admin/bots", authGuard, adminBotIntentsRouter);
   app.use("/api/admin/chat", authGuard, chatAdminRouter);
+  app.use("/api/admin/lep", authGuard, lepAdminRouter);
+  app.use("/api/admin/roles", authGuard, adminRolesRouter);
 
   app.use("/api/admin", authGuard, adminRouter);
   app.use("/api/admin/ai/presets", authGuard, presetsAdmin);

@@ -132,9 +132,19 @@ export type ChatSession = {
 
 // src/lib/api.ts (ส่วนของ type สำหรับข้อความแชท)
 
+export type MessageType =
+  | "TEXT"
+  | "IMAGE"
+  | "FILE"
+  | "STICKER"
+  | "SYSTEM"
+  | "RICH"
+  | "INLINE_KEYBOARD";
+
 export type ChatMessage = {
   id: string;
   sessionId: string;
+  conversationId?: string | null;
 
   tenant: string;
   botId: string;
@@ -143,14 +153,140 @@ export type ChatMessage = {
   // ✅ รองรับแอดมินด้วย
   senderType: "user" | "bot" | "admin";
 
-  messageType: string; // ส่วนใหญ่เป็น "text"
-  text: string;
+  type?: MessageType | string;
+  messageType?: string; // legacy field
+  text: string | null;
+  attachmentUrl?: string | null;
+  attachmentMeta?: unknown;
 
   platformMessageId?: string | null;
   meta?: unknown;
 
   createdAt: string;
   updatedAt?: string;
+  session?: {
+    id: string;
+    platform?: string | null;
+    userId?: string | null;
+    displayName?: string | null;
+    botId?: string | null;
+  };
+};
+
+const normalizeChatMessage = (m: ChatMessage): ChatMessage => ({
+  ...m,
+  conversationId:
+    (m as any).conversationId ?? m.sessionId ?? (m.session?.id ?? null),
+});
+
+/* ---- Knowledge types ---- */
+
+export type KnowledgeDoc = {
+  id: string;
+  tenant: string;
+  title: string;
+  tags?: string | null;
+  body: string;
+  status: string;
+  createdAt?: string;
+  updatedAt?: string;
+  _count?: { chunks: number; bots: number };
+};
+
+export type KnowledgeDocDetail = KnowledgeDoc & {
+  bots?: { botId: string; docId: string; bot?: BotItem }[];
+};
+
+export type KnowledgeChunk = {
+  id: string;
+  tenant: string;
+  docId: string;
+  content: string;
+  embedding?: unknown;
+  tokens: number;
+  createdAt: string;
+  updatedAt?: string;
+};
+
+export type KnowledgeListResponse = {
+  ok: boolean;
+  items: KnowledgeDoc[];
+  page: number;
+  limit: number;
+  total: number;
+  pages: number;
+};
+
+/* ---- LEP (Line Engagement Platform) types ---- */
+
+export type LepHealthResponse = {
+  ok: boolean;
+  source?: string;
+  lepBaseUrl?: string;
+  status?: number;
+  data?: any;
+};
+
+export type LepCampaign = {
+  id: string;
+  name: string;
+  message?: string;
+  status?: string;
+  totalTargets?: number | null;
+  sentCount?: number;
+  failedCount?: number;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type LepCampaignList = {
+  items?: LepCampaign[];
+  page?: number;
+  pageSize?: number;
+  total?: number;
+};
+
+export type LepCampaignResponse = {
+  ok: boolean;
+  source?: string;
+  lepBaseUrl?: string;
+  status?: number;
+  data: LepCampaign | { items?: LepCampaign[] } | LepCampaignList;
+};
+
+export type LepCampaignStatus = {
+  status?: string;
+  sentCount?: number;
+  failedCount?: number;
+  totalTargets?: number | null;
+};
+
+export type LepCampaignSchedule = {
+  id: string;
+  campaignId: string;
+  cron: string;
+  timezone: string;
+  startAt?: string | null;
+  endAt?: string | null;
+  enabled?: boolean;
+  repeatJobKey?: string | null;
+  idempotencyKey?: string | null;
+  status?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type RoleItem = {
+  id: string;
+  name: string;
+  description?: string | null;
+  permissions?: string[];
+};
+
+export type AdminUserItem = {
+  id: string;
+  email: string;
+  roles: RoleItem[];
 };
 
 /* ---- Knowledge types ---- */
@@ -379,6 +515,31 @@ export async function updateBotSecrets(
   ).data;
 }
 
+/* ----- Roles & Admin users ----- */
+
+export async function listRoles() {
+  const res = await API.get<{ ok: boolean; items: RoleItem[] }>(
+    "/admin/roles"
+  );
+  return res.data.items ?? [];
+}
+
+export async function listAdminUsersWithRoles() {
+  const res = await API.get<{ ok: boolean; items: AdminUserItem[] }>(
+    "/admin/roles/admin-users"
+  );
+  return res.data.items ?? [];
+}
+
+export async function assignRole(adminId: string, roleId: string) {
+  return (
+    await API.post<{ ok: boolean; adminId: string; roleId: string }>(
+      "/admin/roles/assign",
+      { adminId, roleId }
+    )
+  ).data;
+}
+
 /** DELETE bot (admin) */
 export async function deleteBot(botId: string) {
   try {
@@ -540,7 +701,12 @@ export async function getChatMessages(
     { params: { limit } }
   );
   const data = res.data as any;
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
+  const items: ChatMessage[] = data.items ?? data.messages ?? [];
+  return items.map(normalizeChatMessage);
+
   return data.items ?? data.messages ?? [];
+ main
 }
 
 // ตำแหน่งเดิมที่คุณเขียน replyChatSession เอาออกไปเลย แล้วแทนด้วยโค้ดนี้
@@ -553,16 +719,67 @@ export type ReplyChatSessionResponse = {
 
 export async function replyChatSession(
   sessionId: string,
-  text: string
+  payload: {
+    text?: string;
+    type?: MessageType | string;
+    attachmentUrl?: string;
+    attachmentMeta?: unknown;
+  }
 ): Promise<ReplyChatSessionResponse> {
   const res = await API.post<ReplyChatSessionResponse>(
     `/admin/chat/sessions/${encodeURIComponent(sessionId)}/reply`,
-    { text }
+    payload
   );
 
   return res.data;
 }
 
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
+export type RichMessagePayload = {
+  sessionId: string;
+  platform?: string;
+  title: string;
+  body: string;
+  imageUrl?: string;
+  buttons?: Array<{ label: string; action: "uri" | "message" | "postback"; value: string }>;
+  inlineKeyboard?: Array<Array<{ text: string; callbackData: string }>>;
+  altText?: string;
+};
+
+export async function sendRichMessage(payload: RichMessagePayload) {
+  const res = await API.post<{ ok: boolean; messageId?: string }>(
+    "/admin/chat/rich-message",
+    payload
+  );
+  return res.data;
+}
+
+export async function searchChatMessages(params: {
+  q: string;
+  botId?: string | null;
+  platform?: string;
+  userId?: string;
+  limit?: number;
+}): Promise<ChatMessage[]> {
+  const res = await API.get<{ ok: boolean; items: ChatMessage[] }>(
+    "/admin/chat/search",
+    {
+      params: {
+        q: params.q,
+        botId: params.botId || undefined,
+        platform: params.platform,
+        userId: params.userId,
+        limit: params.limit,
+      },
+    }
+  );
+  const data = res.data as any;
+  const items: ChatMessage[] = data.items ?? [];
+  return items.map(normalizeChatMessage);
+}
+
+
+ main
 /* ============================== Knowledge APIs ============================== */
 
 export async function listKnowledgeDocs(params?: {
@@ -678,6 +895,94 @@ export async function removeBotKnowledge(botId: string, docId: string) {
   return { ok: true as const };
 }
 
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
+/* ============================== LEP Admin Proxy ============================== */
+
+export async function lepHealth() {
+  return (await API.get<LepHealthResponse>("/admin/lep/health")).data;
+}
+
+export async function lepListCampaigns(params?: { page?: number; pageSize?: number }) {
+  return (
+    await API.get<LepCampaignResponse>("/admin/lep/campaigns", { params })
+  ).data;
+}
+
+export async function lepCreateCampaign(payload: {
+  name: string;
+  message: string;
+  targets?: any;
+}) {
+  return (
+    await API.post<LepCampaignResponse>("/admin/lep/campaigns", payload)
+  ).data;
+}
+
+export async function lepQueueCampaign(id: string) {
+  return (
+    await API.post<LepCampaignResponse>(
+      `/admin/lep/campaigns/${encodeURIComponent(id)}/queue`
+    )
+  ).data;
+}
+
+export async function lepGetCampaign(id: string) {
+  return (
+    await API.get<LepCampaignResponse>(
+      `/admin/lep/campaigns/${encodeURIComponent(id)}`
+    )
+  ).data;
+}
+
+export async function lepGetCampaignStatus(id: string) {
+  const res = await API.get<{
+    ok: boolean;
+    source?: string;
+    lepBaseUrl?: string;
+    status?: number;
+    data?: LepCampaignStatus;
+  }>(`/admin/lep/campaigns/${encodeURIComponent(id)}/status`);
+  return res.data;
+}
+
+export async function lepListCampaignSchedules(campaignId: string) {
+  return (
+    await API.get<{ ok: boolean; data: { campaignId: string; schedules: LepCampaignSchedule[] } }>(
+      `/admin/lep/campaigns/${encodeURIComponent(campaignId)}/schedules`,
+    )
+  ).data;
+}
+
+export async function lepCreateCampaignSchedule(
+  campaignId: string,
+  payload: { cron: string; timezone: string; startAt?: string; endAt?: string; idempotencyKey?: string },
+) {
+  return (
+    await API.post(`/admin/lep/campaigns/${encodeURIComponent(campaignId)}/schedules`, payload)
+  ).data as any;
+}
+
+export async function lepUpdateCampaignSchedule(
+  campaignId: string,
+  scheduleId: string,
+  payload: Partial<{ cron: string; timezone: string; startAt?: string | null; endAt?: string | null; enabled?: boolean; idempotencyKey?: string }>,
+) {
+  return (
+    await API.patch(
+      `/admin/lep/campaigns/${encodeURIComponent(campaignId)}/schedules/${encodeURIComponent(scheduleId)}`,
+      payload,
+    )
+  ).data as any;
+}
+
+export async function lepDeleteCampaignSchedule(campaignId: string, scheduleId: string) {
+  return (
+    await API.delete(`/admin/lep/campaigns/${encodeURIComponent(campaignId)}/schedules/${encodeURIComponent(scheduleId)}`)
+  ).data as any;
+}
+
+
+ main
 
 /* ============================= Helper bundle ============================ */
 

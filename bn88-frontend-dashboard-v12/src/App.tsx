@@ -62,6 +62,16 @@ export default function App() {
               Knowledge
             </Link>
 
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
+            <Link
+              to="/marketing-lep"
+              className="px-3 py-1.5 rounded-lg hover:bg-white/5"
+            >
+              LEP Monitor
+            </Link>
+
+
+ main
             <button
               onClick={onLogout}
               className="ml-2 px-3 py-1.5 rounded-lg bg-neutral-800 hover:bg-neutral-700 border border-neutral-700"

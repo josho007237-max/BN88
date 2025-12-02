@@ -1,5 +1,19 @@
 {
   "compilerOptions": {
+ codex/analyze-bn88-project-structure-and-workflow-s9ghbu
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "Node",
+    "outDir": "dist",
+    "rootDir": "src",
+    "types": ["node"],
+    "esModuleInterop": true,
+    "strict": true,
+    "resolveJsonModule": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"]
+
     "target": "ES2020",
     "module": "CommonJS",
     "moduleResolution": "Node",
@@ -10,4 +24,5 @@
     "skipLibCheck": true
   },
   "include": ["src"]
+ main
 }

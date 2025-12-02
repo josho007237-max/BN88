@@ -9,6 +9,7 @@ import type { Bot } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import { z } from "zod";
 import { sseHub } from "../../lib/sseHub";
+import { requirePermission } from "../../middleware/basicAuth";
 
 /* -------------------------------------------------------------------------- */
 /*                          AI Model & Config defaults                        */
@@ -76,7 +77,7 @@ async function findBot(
 /* -------------------------------------------------------------------------- */
 
 // GET /api/admin/bots
-router.get("/", async (_req: Request, res: Response) => {
+router.get("/", requirePermission(["manageBots"]), async (_req: Request, res: Response) => {
   try {
     const items = await prisma.bot.findMany({
       orderBy: { createdAt: "desc" },
@@ -99,13 +100,14 @@ router.get("/", async (_req: Request, res: Response) => {
 });
 
 // GET /api/admin/bots/:id
-router.get("/:id", findBot, (req: Request, res: Response) => {
+router.get("/:id", requirePermission(["manageBots"]), findBot, (req: Request, res: Response) => {
   return res.json({ ok: true, bot: (req as RequestWithBot).bot as Bot });
 });
 
 // PATCH /api/admin/bots/:id
 router.patch(
   "/:id",
+  requirePermission(["manageBots"]),
   findBot,
   async (req: Request, res: Response): Promise<any> => {
     try {
@@ -157,7 +159,7 @@ router.patch(
 );
 
 // POST /api/admin/bots/init
-router.post("/init", async (_req: Request, res: Response) => {
+router.post("/init", requirePermission(["manageBots"]), async (_req: Request, res: Response) => {
   try {
     const TENANT = "bn9";
     const NAME = "admin-bot-001";

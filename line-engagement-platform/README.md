@@ -12,6 +12,13 @@ Self-contained backend service for LINE Messaging engagement, campaigns, and LIF
 4. Services:
    - API at `http://localhost:8080`
    - Health: `GET /health`
+
+codex/analyze-bn88-project-structure-and-workflow-s9ghbu
+   - Campaign API (new): `POST /campaigns`, `POST /campaigns/:id/queue`, `GET /campaigns`
+
+
+
+main
    - Bull Board (basic auth via `BULL_BOARD_USER`/`BULL_BOARD_PASS`): `http://localhost:8080/admin/queues`
 
 ## Production build
