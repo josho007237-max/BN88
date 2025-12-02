@@ -63,10 +63,14 @@ async function sendLinePushMessage(
 /* GET /api/admin/chat/sessions                                       */
 /* ------------------------------------------------------------------ */
 /**
- * Query:
- *  - botId?: string
- *  - platform?: string ("line" | "telegram" | ... )
- *  - limit?: number (default 50)
+ * Query parameters (all optional except botId):
+ *  - botId?: string           → จำกัดเฉพาะบอทที่เลือก
+ *  - platform?: string        → filter ตาม platform
+ *  - limit?: number           → จำนวนสูงสุด (default 50)
+ *  - q?: string               → keyword ค้นจาก displayName / userId / lastText
+ *  - isIssue?: boolean|string → true/false เพื่อ filter ห้องที่มี/ไม่มีเคส (all = ข้าม)
+ *  - from?: string            → ISO date/datetime เริ่มต้น (เทียบกับ lastMessageAt)
+ *  - to?: string              → ISO date/datetime สิ้นสุด (เทียบกับ lastMessageAt)
  */
 router.get("/sessions", async (req: Request, res: Response) => {
   try {
@@ -79,15 +83,71 @@ router.get("/sessions", async (req: Request, res: Response) => {
         : undefined;
     const limit = Number(req.query.limit) || 50;
 
-    const sessions = await prisma.chatSession.findMany({
-      where: {
-        tenant,
-        ...(botId ? { botId } : {}),
-        ...(platform ? { platform } : {}),
+    const query =
+      typeof req.query.q === "string" ? req.query.q.trim() : undefined;
+
+    const isIssueRaw =
+      typeof req.query.isIssue === "string" ? req.query.isIssue : undefined;
+    const isIssue =
+      isIssueRaw === undefined || isIssueRaw === "all"
+        ? null
+        : ["true", "1", "yes"].includes(isIssueRaw.toLowerCase())
+        ? true
+        : ["false", "0", "no"].includes(isIssueRaw.toLowerCase())
+        ? false
+        : null;
+
+    const parseDate = (v: unknown): Date | null => {
+      if (typeof v !== "string" || !v.trim()) return null;
+      const d = new Date(v);
+      return Number.isNaN(d.getTime()) ? null : d;
+    };
+
+    const from = parseDate(req.query.from);
+    const to = parseDate(req.query.to);
+
+    const where: Prisma.ChatSessionWhereInput = {
+      tenant,
+      ...(botId ? { botId } : {}),
+      ...(platform ? { platform } : {}),
+      ...(query
+        ? {
+            OR: [
+              { displayName: { contains: query, mode: "insensitive" } },
+              { userId: { contains: query, mode: "insensitive" } },
+              { lastText: { contains: query, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+      ...(from || to
+        ? {
+            lastMessageAt: {
+              ...(from ? { gte: from } : {}),
+              ...(to ? { lte: to } : {}),
+            },
+          }
+        : {}),
+      ...(isIssue === true
+        ? { cases: { some: {} } }
+        : isIssue === false
+        ? { cases: { none: {} } }
+        : {}),
+    };
+
+    const rawSessions = await prisma.chatSession.findMany({
+      where,
+      include: {
+        _count: { select: { cases: true } },
       },
       orderBy: { lastMessageAt: "desc" },
       take: limit,
     });
+
+    const sessions = rawSessions.map((s) => ({
+      ...s,
+      hasIssue: Boolean(s._count?.cases && s._count.cases > 0),
+      caseCount: s._count?.cases ?? 0,
+    }));
 
     return res.json({ ok: true, sessions, items: sessions });
   } catch (err) {

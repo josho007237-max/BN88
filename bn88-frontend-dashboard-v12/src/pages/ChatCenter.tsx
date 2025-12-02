@@ -27,6 +27,8 @@ type PlatformFilterValue =
   | "webchat"
   | "other";
 
+type IssueFilterValue = "all" | "issue" | "nonIssue";
+
 /* ---------------------- Intent helpers (frontend only) ---------------------- */
 
 /** ดึง intent code ล่าสุดจาก session (ลองอ่านจากหลาย field) */
@@ -99,7 +101,15 @@ const ChatCenter: React.FC = () => {
   const apiBase = getApiBase();
 
   // ช่องค้นหา sessions
+  const [sessionQueryInput, setSessionQueryInput] = useState("");
   const [sessionQuery, setSessionQuery] = useState("");
+
+  // filter issue / เคสปัญหา
+  const [issueFilter, setIssueFilter] = useState<IssueFilterValue>("all");
+
+  // filter เวลา
+  const [dateFrom, setDateFrom] = useState<string | null>(null);
+  const [dateTo, setDateTo] = useState<string | null>(null);
 
   // filter platform
   const [platformFilter, setPlatformFilter] =
@@ -107,18 +117,66 @@ const ChatCenter: React.FC = () => {
 
   const messagesRef = useRef<HTMLDivElement | null>(null);
 
+  useEffect(() => {
+    const handle = window.setTimeout(() => {
+      setSessionQuery(sessionQueryInput.trim());
+    }, 400);
+    return () => window.clearTimeout(handle);
+  }, [sessionQueryInput]);
+
   const fetchSessions = useCallback(
     async (botId: string, preferSessionId?: string | null) => {
       try {
         setLoadingSessions(true);
         setError(null);
-        const data = await getChatSessions(botId, 50);
-        setSessions(data);
+        const platformParam =
+          platformFilter === "all" || platformFilter === "other"
+            ? undefined
+            : platformFilter;
+
+        const data = await getChatSessions(botId, {
+          limit: 50,
+          platform: platformParam,
+          query: sessionQuery || undefined,
+          isIssue:
+            issueFilter === "all"
+              ? null
+              : issueFilter === "issue"
+              ? true
+              : false,
+          from: dateFrom || undefined,
+          to: dateTo || undefined,
+        });
+
+        const normalized = data
+          .map((s) => ({
+            ...s,
+            caseCount:
+              (s as any).caseCount ?? (s as any)._count?.cases ?? s.caseCount ?? 0,
+            hasIssue:
+              typeof s.hasIssue === "boolean"
+                ? s.hasIssue
+                : Boolean(
+                    (s as any).hasIssue ??
+                      (s as any).caseCount ??
+                      (s as any)._count?.cases
+                  ),
+          }))
+          .filter((s) => {
+            if (platformFilter === "other") {
+              const plat = (s.platform || "").toLowerCase();
+              return !["line", "telegram", "facebook", "webchat"].includes(plat);
+            }
+            return true;
+          });
+
+        setSessions(normalized);
 
         const preferId = preferSessionId || selectedSession?.id || null;
+        const list = normalized;
         const nextSession = preferId
-          ? data.find((s) => s.id === preferId) ?? data[0] ?? null
-          : data[0] ?? null;
+          ? list.find((s) => s.id === preferId) ?? list[0] ?? null
+          : list[0] ?? null;
 
         setSelectedSession((prev) => {
           if (prev?.id && nextSession?.id && prev.id === nextSession.id) {
@@ -139,7 +197,14 @@ const ChatCenter: React.FC = () => {
         setLoadingSessions(false);
       }
     },
-    [selectedSession?.id]
+    [
+      selectedSession?.id,
+      platformFilter,
+      sessionQuery,
+      issueFilter,
+      dateFrom,
+      dateTo,
+    ]
   );
 
   const fetchMessages = useCallback(async (sessionId: string) => {
@@ -342,9 +407,8 @@ const ChatCenter: React.FC = () => {
   /* ------------------------- filter ห้องแชทตาม query + platform ------------------------- */
 
   const filteredSessions = useMemo(() => {
-    const q = sessionQuery.trim().toLowerCase();
+    const q = sessionQueryInput.trim().toLowerCase();
     return sessions.filter((s) => {
-      // filter platform
       const plat = (s.platform || "").toLowerCase();
       if (platformFilter !== "all") {
         if (platformFilter === "other") {
@@ -356,13 +420,16 @@ const ChatCenter: React.FC = () => {
         }
       }
 
-      // filter text
+      if (issueFilter === "issue" && !s.hasIssue) return false;
+      if (issueFilter === "nonIssue" && s.hasIssue) return false;
+
       if (!q) return true;
       const name = (s.displayName || "").toLowerCase();
       const uid = (s.userId || "").toLowerCase();
-      return name.includes(q) || uid.includes(q);
+      const lastText = (s.lastText || "").toLowerCase();
+      return name.includes(q) || uid.includes(q) || lastText.includes(q);
     });
-  }, [sessions, sessionQuery, platformFilter]);
+  }, [sessions, sessionQueryInput, platformFilter, issueFilter]);
 
   /* ------------------------- group messages by day ------------------------- */
 
@@ -493,9 +560,45 @@ const ChatCenter: React.FC = () => {
               aria-label="ค้นหาห้องแชท"
               className="w-full bg-zinc-950/70 border border-zinc-700 rounded-lg px-2 py-1 text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500"
               placeholder="ค้นหาชื่อลูกค้า หรือ userId..."
-              value={sessionQuery}
-              onChange={(e) => setSessionQuery(e.target.value)}
+              value={sessionQueryInput}
+              onChange={(e) => setSessionQueryInput(e.target.value)}
             />
+
+            <div className="flex flex-wrap items-center gap-2 text-[11px] text-zinc-300">
+              <label className="flex items-center gap-1">
+                <span className="text-zinc-400">เคส:</span>
+                <select
+                  className="bg-zinc-950/70 border border-zinc-700 rounded px-2 py-1"
+                  value={issueFilter}
+                  onChange={(e) =>
+                    setIssueFilter(e.target.value as IssueFilterValue)
+                  }
+                >
+                  <option value="all">ทั้งหมด</option>
+                  <option value="issue">มีเคสปัญหา</option>
+                  <option value="nonIssue">ไม่มีเคส</option>
+                </select>
+              </label>
+
+              <label className="flex items-center gap-1">
+                <span className="text-zinc-400">จาก</span>
+                <input
+                  type="date"
+                  className="bg-zinc-950/70 border border-zinc-700 rounded px-2 py-1"
+                  value={dateFrom ?? ""}
+                  onChange={(e) => setDateFrom(e.target.value || null)}
+                />
+              </label>
+              <label className="flex items-center gap-1">
+                <span className="text-zinc-400">ถึง</span>
+                <input
+                  type="date"
+                  className="bg-zinc-950/70 border border-zinc-700 rounded px-2 py-1"
+                  value={dateTo ?? ""}
+                  onChange={(e) => setDateTo(e.target.value || null)}
+                />
+              </label>
+            </div>
           </div>
 
           {loadingSessions ? (
@@ -527,6 +630,11 @@ const ChatCenter: React.FC = () => {
                       </div>
                       <div className="flex items-center gap-1">
                         <IntentBadge code={intentCode} />
+                        {s.hasIssue && (
+                          <span className="px-2 py-0.5 rounded-full text-[10px] bg-rose-500/20 text-rose-200 border border-rose-500/40">
+                            เคสปัญหา
+                          </span>
+                        )}
                         <span className="px-2 py-0.5 rounded-full text-[10px] bg-zinc-800 text-zinc-200">
                           {platformLabel(s.platform)}
                         </span>
