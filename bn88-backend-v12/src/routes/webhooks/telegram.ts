@@ -35,7 +35,15 @@ type TgMessage = {
 type TgUpdate = {
   update_id: number;
   message?: TgMessage;
+  callback_query?: TgCallbackQuery;
   [key: string]: unknown;
+};
+
+type TgCallbackQuery = {
+  id: string;
+  data?: string;
+  from?: TgUser;
+  message?: TgMessage;
 };
 
 function isTextMessage(msg: any): msg is TgMessage & { text: string } {
@@ -53,6 +61,24 @@ export type NormalizedTelegramMessage = {
   attachmentUrl?: string | null;
   attachmentMeta?: Record<string, unknown> | null;
 };
+
+export function mapTelegramCallback(
+  cb?: TgCallbackQuery
+): NormalizedTelegramMessage | null {
+  if (!cb || !cb.message) return null;
+
+  return {
+    messageType: MessageType.INLINE_KEYBOARD,
+    text: cb.data ?? "callback",
+    attachmentUrl: undefined,
+    attachmentMeta: {
+      callbackId: cb.id,
+      callbackData: cb.data,
+      messageId: cb.message.message_id,
+      fromUserId: cb.from?.id,
+    },
+  };
+}
 
 export function mapTelegramMessage(msg?: TgMessage): NormalizedTelegramMessage | null {
   if (!msg || !msg.chat) return null;
@@ -185,6 +211,47 @@ router.post("/", async (req: Request, res: Response) => {
 
     const { botId, tenant: botTenant, botToken } = picked;
     const update = req.body as TgUpdate;
+
+    if (update?.callback_query) {
+      const cb = update.callback_query;
+      const mappedCallback = mapTelegramCallback(cb);
+      if (!mappedCallback) {
+        log.info("[TELEGRAM] skip callback (cannot map)", cb);
+        return res.status(200).json({ ok: true, skipped: true, reason: "no_callback" });
+      }
+
+      const platformUserId = String(
+        cb.from?.id ?? cb.message?.chat?.id ?? cb.message?.from?.id ?? ""
+      );
+      if (!platformUserId) {
+        log.info("[TELEGRAM] skip callback (no user)", cb);
+        return res.status(200).json({ ok: true, skipped: true, reason: "no_user" });
+      }
+
+      await processIncomingMessage({
+        botId,
+        platform: "telegram" as SupportedPlatform,
+        userId: platformUserId,
+        text: mappedCallback.text,
+        rawPayload: cb,
+        platformMessageId: String(cb.id),
+        messageType: mappedCallback.messageType,
+        attachmentUrl: mappedCallback.attachmentUrl ?? undefined,
+        attachmentMeta: mappedCallback.attachmentMeta ?? undefined,
+        requestId,
+      });
+
+      const f = (globalThis as any).fetch as typeof fetch | undefined;
+      if (f && cb.id) {
+        void f(`https://api.telegram.org/bot${botToken}/answerCallbackQuery`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callback_query_id: cb.id }),
+        }).catch((err: any) => log.warn("[TELEGRAM] answerCallbackQuery warn", err));
+      }
+
+      return res.status(200).json({ ok: true, handled: "callback" });
+    }
 
     if (!update || !update.message) {
       log.info("[TELEGRAM] skip update (no message)", update?.message);

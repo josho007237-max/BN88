@@ -10,24 +10,50 @@ import { recordDeliveryMetric } from "../metrics.live";
 import { createRequestLogger, getRequestId } from "../../utils/logger";
 import { requirePermission } from "../../middleware/basicAuth";
 import { ensureConversation } from "../../services/conversation";
+import {
+  buildFlexMessage,
+  type FlexButton,
+  type FlexMessageInput,
+} from "../../services/lineFlex";
 
 const router = Router();
 const TENANT_DEFAULT = process.env.TENANT_DEFAULT || "bn9";
-const MESSAGE_TYPES: MessageType[] = [
+const MESSAGE_TYPES = [
   "TEXT",
   "IMAGE",
   "FILE",
   "STICKER",
   "SYSTEM",
-];
+  "RICH",
+  "INLINE_KEYBOARD",
+] as const satisfies MessageType[];
 
 const replyPayloadSchema = z.object({
   type: z
-    .enum(MESSAGE_TYPES as [MessageType, MessageType, MessageType, MessageType, MessageType])
+    .enum(MESSAGE_TYPES as [MessageType, ...MessageType[]])
     .optional(),
   text: z.string().optional(),
   attachmentUrl: z.string().url().optional(),
   attachmentMeta: z.any().optional(),
+});
+
+const flexButtonSchema = z.object({
+  label: z.string().min(1),
+  action: z.enum(["uri", "message", "postback"] as const),
+  value: z.string().min(1),
+});
+
+const richPayloadSchema = z.object({
+  sessionId: z.string().min(1),
+  platform: z.enum(["line", "telegram"]).optional(),
+  title: z.string().min(1),
+  body: z.string().min(1),
+  imageUrl: z.string().url().optional(),
+  buttons: z.array(flexButtonSchema).optional(),
+  inlineKeyboard: z
+    .array(z.array(z.object({ text: z.string().min(1), callbackData: z.string().min(1) })))
+    .optional(),
+  altText: z.string().optional(),
 });
 
 const searchQuerySchema = z.object({
@@ -208,6 +234,10 @@ function buildLineMessage(
   attachmentUrl?: string | null,
   attachmentMeta?: Record<string, unknown>
 ) {
+  if (type === "RICH" && attachmentMeta && "cards" in attachmentMeta) {
+    return attachmentMeta as any;
+  }
+
   if (type === "IMAGE" && attachmentUrl) {
     return {
       type: "image",
@@ -286,6 +316,19 @@ async function sendTelegramRich(
   }
 
   try {
+    if (type === "INLINE_KEYBOARD") {
+      const keyboard = (attachmentMeta as any)?.inlineKeyboard as
+        | Array<Array<{ text: string; callbackData: string }>>
+        | undefined;
+      const inline_keyboard = keyboard?.map((row) =>
+        row.map((btn) => ({ text: btn.text, callback_data: btn.callbackData }))
+      );
+
+      return await sendTelegramMessage(token, chatId, text, replyToMessageId, {
+        inlineKeyboard: inline_keyboard,
+      });
+    }
+
     if (type === "IMAGE" && attachmentUrl) {
       const resp = await f(`https://api.telegram.org/bot${token}/sendPhoto`, {
         method: "POST",
@@ -507,6 +550,175 @@ router.get(
       return res
         .status(500)
         .json({ ok: false, message: "internal_error_list_messages" });
+    }
+  }
+);
+
+/* ------------------------------------------------------------------ */
+/* POST /api/admin/chat/rich-message                                  */
+/* ------------------------------------------------------------------ */
+
+router.post(
+  "/rich-message",
+  requirePermission(["manageCampaigns"]),
+  async (req: Request, res: Response): Promise<Response> => {
+    const requestId = getRequestId(req);
+    const log = createRequestLogger(requestId);
+    try {
+      const tenant = getTenant(req);
+      const parsed = richPayloadSchema.safeParse(req.body ?? {});
+      if (!parsed.success) {
+        return res.status(400).json({ ok: false, message: "invalid_payload" });
+      }
+
+      const payload = parsed.data;
+      const session = await prisma.chatSession.findFirst({
+        where: { id: payload.sessionId, tenant },
+        include: { bot: { include: { secret: true } } },
+      });
+
+      if (!session?.bot) {
+        return res
+          .status(404)
+          .json({ ok: false, message: "chat_session_not_found" });
+      }
+
+      if (payload.platform && payload.platform !== session.platform) {
+        return res.status(400).json({ ok: false, message: "platform_mismatch" });
+      }
+
+      const bot = session.bot;
+      const conversation = await ensureConversation({
+        botId: bot.id,
+        tenant: session.tenant,
+        userId: session.userId,
+        platform: session.platform,
+        requestId,
+      });
+
+      const messageText = `${payload.title}\n${payload.body}`;
+      let delivered = false;
+      let messageType: MessageType = "RICH";
+      let attachmentMeta: any = null;
+      let attachmentUrl: string | null = payload.imageUrl ?? null;
+
+      if (session.platform === "line") {
+        const token = bot.secret?.channelAccessToken;
+        if (!token) {
+          return res.status(400).json({ ok: false, message: "line_token_missing" });
+        }
+        const flexPayload: FlexMessageInput = {
+          altText: payload.altText || payload.title,
+          cards: [
+            {
+              title: payload.title,
+              body: payload.body,
+              imageUrl: payload.imageUrl,
+              buttons: (payload.buttons as FlexButton[] | undefined) ?? [],
+            },
+          ],
+        };
+        const flexMessage = buildFlexMessage(flexPayload);
+        attachmentMeta = flexMessage;
+        delivered = await sendLineRichMessage(
+          token,
+          session.userId,
+          "RICH",
+          messageText,
+          attachmentUrl,
+          flexMessage as any
+        );
+      } else if (session.platform === "telegram") {
+        const token = bot.secret?.telegramBotToken;
+        if (!token) {
+          return res
+            .status(400)
+            .json({ ok: false, message: "telegram_token_missing" });
+        }
+
+        const inlineKeyboard = payload.inlineKeyboard?.map((row) =>
+          row.map((btn) => ({ text: btn.text, callbackData: btn.callbackData }))
+        );
+
+        if (inlineKeyboard?.length) {
+          messageType = "INLINE_KEYBOARD";
+          attachmentMeta = { inlineKeyboard };
+        } else {
+          messageType = "RICH";
+          attachmentMeta = {
+            buttons: payload.buttons,
+            imageUrl: payload.imageUrl,
+          };
+        }
+
+        delivered = await sendTelegramRich(
+          token,
+          session.userId,
+          messageType,
+          messageText,
+          payload.imageUrl,
+          attachmentMeta ?? undefined
+        );
+      } else {
+        return res.status(400).json({ ok: false, message: "unsupported_platform" });
+      }
+
+      recordDeliveryMetric(`${session.platform}:${bot.id}`, delivered, requestId);
+
+      const msg = await prisma.chatMessage.create({
+        data: {
+          tenant: session.tenant,
+          botId: session.botId,
+          platform: session.platform,
+          sessionId: session.id,
+          conversationId: conversation.id,
+          senderType: "admin",
+          type: messageType,
+          text: messageText,
+          attachmentUrl: attachmentUrl,
+          attachmentMeta,
+          meta: { via: "admin_rich", delivered },
+        },
+        select: {
+          id: true,
+          text: true,
+          type: true,
+          attachmentUrl: true,
+          attachmentMeta: true,
+          createdAt: true,
+        },
+      });
+
+      try {
+        sseHub.broadcast({
+          type: "chat:message:new",
+          tenant: session.tenant,
+          botId: session.botId,
+          sessionId: session.id,
+          conversationId: conversation.id,
+          message: {
+            id: msg.id,
+            senderType: "admin",
+            text: msg.text,
+            type: msg.type,
+            attachmentUrl: msg.attachmentUrl,
+            attachmentMeta: msg.attachmentMeta,
+            createdAt: msg.createdAt,
+          },
+        } as any);
+      } catch (broadcastErr) {
+        log.warn("[admin rich message] SSE broadcast warn", broadcastErr);
+      }
+
+      await prisma.chatSession.update({
+        where: { id: session.id },
+        data: { lastMessageAt: new Date(), lastText: msg.text, lastDirection: "admin" },
+      });
+
+      return res.json({ ok: true, delivered, messageId: msg.id });
+    } catch (err: any) {
+      log.error({ err, requestId }, "admin_rich_message_error");
+      return res.status(500).json({ ok: false, message: "internal_error_rich_message" });
     }
   }
 );

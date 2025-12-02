@@ -27,6 +27,7 @@ import {
   replyChatSession,
   getApiBase,
   searchChatMessages,
+  sendRichMessage,
 } from "../lib/api";
 
 const POLL_INTERVAL_MS = 3000; // 3 วินาที
@@ -133,6 +134,18 @@ const ChatCenter: React.FC = () => {
   const [replyType, setReplyType] = useState<MessageType>("TEXT");
   const [attachmentUrl, setAttachmentUrl] = useState("");
   const [attachmentMetaInput, setAttachmentMetaInput] = useState("");
+  const [richPlatform, setRichPlatform] = useState<string>("line");
+  const [richTitle, setRichTitle] = useState("");
+  const [richBody, setRichBody] = useState("");
+  const [richImageUrl, setRichImageUrl] = useState("");
+  const [richAltText, setRichAltText] = useState("");
+  const [richButtons, setRichButtons] = useState<
+    Array<{ label: string; action: "uri" | "message" | "postback"; value: string }>
+  >([]);
+  const [richInlineKeyboard, setRichInlineKeyboard] = useState<
+    Array<Array<{ text: string; callbackData: string }>>
+  >([]);
+  const [sendingRich, setSendingRich] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [metrics, setMetrics] = useState<MetricsSnapshot | null>(null);
 
@@ -281,6 +294,12 @@ const ChatCenter: React.FC = () => {
     };
   }, [selectedBotId, selectedSession?.id, fetchSessions, fetchMessages]);
 
+  useEffect(() => {
+    if (selectedSession?.platform) {
+      setRichPlatform(selectedSession.platform);
+    }
+  }, [selectedSession?.platform]);
+
   /* -------------------------- Metrics SSE monitor -------------------------- */
 
   useEffect(() => {
@@ -415,6 +434,108 @@ const ChatCenter: React.FC = () => {
       toast.error("ส่งข้อความไม่สำเร็จ");
     } finally {
       setSending(false);
+    }
+  };
+
+  const handleAddRichButton = () => {
+    setRichButtons((prev) => [
+      ...prev,
+      { label: "ปุ่ม", action: "uri", value: "https://example.com" },
+    ]);
+  };
+
+  const handleUpdateRichButton = (
+    idx: number,
+    key: "label" | "action" | "value",
+    value: string
+  ) => {
+    setRichButtons((prev) => {
+      const next = [...prev];
+      if (!next[idx]) return prev;
+      next[idx] = { ...next[idx], [key]: value } as any;
+      return next;
+    });
+  };
+
+  const handleAddInlineRow = () => {
+    setRichInlineKeyboard((prev) => [...prev, [{ text: "ปุ่ม", callbackData: "cb" }]]);
+  };
+
+  const handleAddInlineButton = (rowIdx: number) => {
+    setRichInlineKeyboard((prev) => {
+      const rows = prev.map((r) => [...r]);
+      if (!rows[rowIdx]) rows[rowIdx] = [];
+      rows[rowIdx].push({ text: "ปุ่มใหม่", callbackData: "cb" });
+      return rows;
+    });
+  };
+
+  const handleUpdateInlineButton = (
+    rowIdx: number,
+    btnIdx: number,
+    field: "text" | "callbackData",
+    value: string
+  ) => {
+    setRichInlineKeyboard((prev) => {
+      const rows = prev.map((r) => [...r]);
+      if (!rows[rowIdx] || !rows[rowIdx][btnIdx]) return prev;
+      rows[rowIdx][btnIdx] = { ...rows[rowIdx][btnIdx], [field]: value };
+      return rows;
+    });
+  };
+
+  const resetRichComposer = () => {
+    setRichTitle("");
+    setRichBody("");
+    setRichImageUrl("");
+    setRichAltText("");
+    setRichButtons([]);
+    setRichInlineKeyboard([]);
+  };
+
+  const handleSendRich = async () => {
+    if (!selectedSession) {
+      toast.error("กรุณาเลือกห้องแชทก่อน");
+      return;
+    }
+    if (!richTitle.trim() || !richBody.trim()) {
+      toast.error("กรุณากรอกหัวข้อและเนื้อหา");
+      return;
+    }
+
+    setSendingRich(true);
+    try {
+      const payload = {
+        sessionId: selectedSession.id,
+        platform: richPlatform,
+        title: richTitle.trim(),
+        body: richBody.trim(),
+        imageUrl: richImageUrl.trim() || undefined,
+        altText: richAltText.trim() || undefined,
+        buttons: richButtons.filter((b) => b.label.trim() && b.value.trim()),
+        inlineKeyboard:
+          richPlatform === "telegram"
+            ? richInlineKeyboard
+                .map((row) =>
+                  row.filter((b) => b.text.trim() && b.callbackData.trim())
+                )
+                .filter((row) => row.length > 0)
+            : undefined,
+      };
+
+      const res = await sendRichMessage(payload);
+      if (res.ok) {
+        toast.success("ส่ง Rich Message สำเร็จ");
+        resetRichComposer();
+        await fetchMessages(selectedSession.id);
+      } else {
+        toast.error("ส่ง Rich Message ไม่สำเร็จ");
+      }
+    } catch (err) {
+      console.error("send rich error", err);
+      toast.error("ส่ง Rich Message ไม่สำเร็จ");
+    } finally {
+      setSendingRich(false);
     }
   };
 
@@ -1074,6 +1195,69 @@ const ChatCenter: React.FC = () => {
                     </a>
                   </div>
                 );
+              } else if (msgType === "RICH") {
+                const meta: any = m.attachmentMeta || {};
+                const cards: any[] =
+                  meta?.contents?.contents || meta?.cards || (meta?.contents ? [meta.contents] : []);
+                content = (
+                  <div className="space-y-2">
+                    {m.text && <div className="font-semibold whitespace-pre-line">{m.text}</div>}
+                    {cards.length > 0 && (
+                      <div className="space-y-2">
+                        {cards.slice(0, 3).map((c, idx) => (
+                          <div
+                            key={idx}
+                            className="p-2 rounded border border-white/10 bg-black/20 space-y-1"
+                          >
+                            {c.hero?.url && (
+                              <img
+                                src={c.hero.url}
+                                alt="rich"
+                                className="rounded border border-white/10 max-h-40"
+                              />
+                            )}
+                            {c.body?.contents?.[0]?.text && (
+                              <div className="font-semibold text-sm">{c.body.contents[0].text}</div>
+                            )}
+                            {c.body?.contents?.[1]?.text && (
+                              <div className="text-xs text-zinc-300 whitespace-pre-line">
+                                {c.body.contents[1].text}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    {!cards.length && meta && (
+                      <pre className="text-[10px] bg-black/30 p-2 rounded border border-white/10 overflow-x-auto">
+                        {JSON.stringify(meta, null, 2)}
+                      </pre>
+                    )}
+                  </div>
+                );
+              } else if (msgType === "INLINE_KEYBOARD") {
+                const rows: any[] = (m.attachmentMeta as any)?.inlineKeyboard || [];
+                content = (
+                  <div className="space-y-2">
+                    {m.text && <div className="whitespace-pre-line">{m.text}</div>}
+                    {rows.length > 0 && (
+                      <div className="space-y-1">
+                        {rows.map((row, idx) => (
+                          <div key={idx} className="flex flex-wrap gap-2">
+                            {row.map((btn: any, bidx: number) => (
+                              <span
+                                key={`${idx}-${bidx}`}
+                                className="px-2 py-1 rounded bg-sky-700 text-white text-[11px]"
+                              >
+                                {btn.text || "ปุ่ม"}
+                              </span>
+                            ))}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
               } else {
                 content = (
                   <div className="space-y-1">
@@ -1139,6 +1323,236 @@ const ChatCenter: React.FC = () => {
                 </React.Fragment>
               );
             })}
+          </div>
+
+          {/* Rich / Inline Keyboard Composer */}
+          <div className="px-4 py-4 border-t border-zinc-800 bg-black/20 flex flex-col gap-3">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <div className="font-semibold text-sm">ส่ง Rich Message / Inline Keyboard</div>
+                <div className="text-xs text-zinc-400">
+                  LINE ใช้ Flex Message, Telegram ใช้ Inline Keyboard
+                </div>
+              </div>
+              <div className="flex items-center gap-2 text-xs">
+                <label className="flex items-center gap-2">
+                  แพลตฟอร์ม
+                  <select
+                    className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1"
+                    value={richPlatform}
+                    onChange={(e) => setRichPlatform(e.target.value)}
+                    disabled={sendingRich}
+                  >
+                    <option value="line">LINE</option>
+                    <option value="telegram">Telegram</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+
+            <div className="grid md:grid-cols-2 gap-3">
+              <div className="space-y-2 text-xs text-zinc-200">
+                <input
+                  className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm"
+                  placeholder="หัวข้อ"
+                  value={richTitle}
+                  onChange={(e) => setRichTitle(e.target.value)}
+                  disabled={sendingRich}
+                />
+                <textarea
+                  className="w-full min-h-[80px] bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm"
+                  placeholder="เนื้อหา"
+                  value={richBody}
+                  onChange={(e) => setRichBody(e.target.value)}
+                  disabled={sendingRich}
+                />
+                <input
+                  className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm"
+                  placeholder="ลิงก์รูปภาพ (ถ้ามี)"
+                  value={richImageUrl}
+                  onChange={(e) => setRichImageUrl(e.target.value)}
+                  disabled={sendingRich}
+                />
+                <input
+                  className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm"
+                  placeholder="ALT text (สำหรับ LINE Flex)"
+                  value={richAltText}
+                  onChange={(e) => setRichAltText(e.target.value)}
+                  disabled={sendingRich}
+                />
+
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-zinc-300">ปุ่ม (Flex)</span>
+                    <button
+                      type="button"
+                      className="px-2 py-1 text-[11px] bg-zinc-800 rounded border border-zinc-700"
+                      onClick={handleAddRichButton}
+                      disabled={sendingRich}
+                    >
+                      + เพิ่มปุ่ม
+                    </button>
+                  </div>
+                  {richButtons.length === 0 && (
+                    <div className="text-zinc-500 text-[11px]">ยังไม่มีปุ่ม</div>
+                  )}
+                  {richButtons.map((btn, idx) => (
+                    <div
+                      key={`${idx}-${btn.label}`}
+                      className="grid grid-cols-3 gap-2 items-center"
+                    >
+                      <input
+                        className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-[11px]"
+                        placeholder="label"
+                        value={btn.label}
+                        onChange={(e) => handleUpdateRichButton(idx, "label", e.target.value)}
+                        disabled={sendingRich}
+                      />
+                      <select
+                        className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-[11px]"
+                        value={btn.action}
+                        onChange={(e) =>
+                          handleUpdateRichButton(idx, "action", e.target.value as any)
+                        }
+                        disabled={sendingRich}
+                      >
+                        <option value="uri">URI</option>
+                        <option value="message">Message</option>
+                        <option value="postback">Postback</option>
+                      </select>
+                      <input
+                        className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-[11px] col-span-1"
+                        placeholder="ค่า"
+                        value={btn.value}
+                        onChange={(e) => handleUpdateRichButton(idx, "value", e.target.value)}
+                        disabled={sendingRich}
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                {richPlatform === "telegram" && (
+                  <div className="space-y-2 mt-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-zinc-300">Inline Keyboard</span>
+                      <button
+                        type="button"
+                        className="px-2 py-1 text-[11px] bg-zinc-800 rounded border border-zinc-700"
+                        onClick={handleAddInlineRow}
+                        disabled={sendingRich}
+                      >
+                        + เพิ่มแถว
+                      </button>
+                    </div>
+                    {richInlineKeyboard.length === 0 && (
+                      <div className="text-[11px] text-zinc-500">ยังไม่มีปุ่ม</div>
+                    )}
+                    {richInlineKeyboard.map((row, rowIdx) => (
+                      <div key={`row-${rowIdx}`} className="space-y-1 p-2 bg-zinc-900 rounded border border-zinc-800">
+                        <div className="flex items-center justify-between text-[11px] text-zinc-400">
+                          <span>แถว {rowIdx + 1}</span>
+                          <button
+                            type="button"
+                            className="px-2 py-1 bg-zinc-800 rounded border border-zinc-700"
+                            onClick={() => handleAddInlineButton(rowIdx)}
+                            disabled={sendingRich}
+                          >
+                            + ปุ่ม
+                          </button>
+                        </div>
+                        <div className="space-y-1">
+                          {row.map((btn, btnIdx) => (
+                            <div key={`btn-${rowIdx}-${btnIdx}`} className="grid grid-cols-2 gap-2">
+                              <input
+                                className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-[11px]"
+                                placeholder="ข้อความปุ่ม"
+                                value={btn.text}
+                                onChange={(e) =>
+                                  handleUpdateInlineButton(rowIdx, btnIdx, "text", e.target.value)
+                                }
+                                disabled={sendingRich}
+                              />
+                              <input
+                                className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-[11px]"
+                                placeholder="callback_data"
+                                value={btn.callbackData}
+                                onChange={(e) =>
+                                  handleUpdateInlineButton(rowIdx, btnIdx, "callbackData", e.target.value)
+                                }
+                                disabled={sendingRich}
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="flex gap-2 mt-3">
+                  <button
+                    type="button"
+                    onClick={handleSendRich}
+                    disabled={sendingRich || !selectedSession}
+                    className="px-4 py-2 rounded bg-emerald-600 text-white text-xs disabled:opacity-50"
+                  >
+                    {sendingRich ? "กำลังส่ง..." : "ส่ง Rich Message"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={resetRichComposer}
+                    className="px-3 py-2 rounded bg-zinc-800 text-xs"
+                  >
+                    ล้างฟอร์ม
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-3 border border-zinc-800 rounded-lg bg-zinc-950/60 text-xs text-zinc-200 space-y-2">
+                <div className="font-semibold text-sm">ตัวอย่าง Preview</div>
+                <div className="border border-zinc-800 rounded-lg p-3 bg-black/30 space-y-2">
+                  <div className="text-sm font-bold">{richTitle || "(หัวข้อ)"}</div>
+                  <div className="text-xs text-zinc-300 whitespace-pre-line">
+                    {richBody || "รายละเอียด"}
+                  </div>
+                  {richImageUrl && (
+                    <img
+                      src={richImageUrl}
+                      alt="preview"
+                      className="rounded border border-white/10 max-h-48"
+                    />
+                  )}
+                  {richButtons.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {richButtons.map((b, idx) => (
+                        <span
+                          key={`${b.label}-${idx}`}
+                          className="px-2 py-1 rounded bg-emerald-700 text-white text-[11px]"
+                        >
+                          {b.label || "ปุ่ม"}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {richPlatform === "telegram" && richInlineKeyboard.length > 0 && (
+                    <div className="space-y-1">
+                      {richInlineKeyboard.map((row, idx) => (
+                        <div key={`preview-row-${idx}`} className="flex gap-2">
+                          {row.map((btn, bidx) => (
+                            <span
+                              key={`preview-btn-${idx}-${bidx}`}
+                              className="px-2 py-1 rounded bg-sky-700 text-white text-[11px]"
+                            >
+                              {btn.text || "ปุ่ม"}
+                            </span>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
           </div>
 
           {/* เครื่องมือแนบไฟล์/ประเภทข้อความ */}

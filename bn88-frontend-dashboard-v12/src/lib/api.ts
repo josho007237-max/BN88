@@ -132,7 +132,14 @@ export type ChatSession = {
 
 // src/lib/api.ts (ส่วนของ type สำหรับข้อความแชท)
 
-export type MessageType = "TEXT" | "IMAGE" | "FILE" | "STICKER" | "SYSTEM";
+export type MessageType =
+  | "TEXT"
+  | "IMAGE"
+  | "FILE"
+  | "STICKER"
+  | "SYSTEM"
+  | "RICH"
+  | "INLINE_KEYBOARD";
 
 export type ChatMessage = {
   id: string;
@@ -682,6 +689,25 @@ export async function replyChatSession(
     payload
   );
 
+  return res.data;
+}
+
+export type RichMessagePayload = {
+  sessionId: string;
+  platform?: string;
+  title: string;
+  body: string;
+  imageUrl?: string;
+  buttons?: Array<{ label: string; action: "uri" | "message" | "postback"; value: string }>;
+  inlineKeyboard?: Array<Array<{ text: string; callbackData: string }>>;
+  altText?: string;
+};
+
+export async function sendRichMessage(payload: RichMessagePayload) {
+  const res = await API.post<{ ok: boolean; messageId?: string }>(
+    "/admin/chat/rich-message",
+    payload
+  );
   return res.data;
 }
 

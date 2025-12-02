@@ -369,6 +369,8 @@ enum MessageType {
   FILE
   STICKER
   SYSTEM
+  RICH
+  INLINE_KEYBOARD
 }
 
 model CampaignSchedule {

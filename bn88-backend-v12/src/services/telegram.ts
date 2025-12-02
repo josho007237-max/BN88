@@ -5,6 +5,7 @@ export type TelegramSendOptions = {
   photoUrl?: string;
   documentUrl?: string;
   documentName?: string;
+  inlineKeyboard?: Array<Array<{ text: string; callback_data: string }>>;
 };
 
 export async function sendTelegramMessage(
@@ -42,6 +43,12 @@ export async function sendTelegramMessage(
     if (text && !options?.documentName) body.caption = text;
   } else {
     body.text = text;
+  }
+
+  if (options?.inlineKeyboard?.length) {
+    body.reply_markup = {
+      inline_keyboard: options.inlineKeyboard,
+    };
   }
 
   if (replyToMessageId) {
