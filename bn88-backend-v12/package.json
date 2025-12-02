@@ -28,6 +28,7 @@
     "@prisma/client": "^6.19.0",
     "@types/axios": "^0.14.0",
     "axios": "^1.7.9",
+    "bullmq": "^5.29.3",
     "bcryptjs": "^3.0.3",
     "compression": "^1.8.1",
     "cors": "^2.8.5",
@@ -38,6 +39,7 @@
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.1",
     "openai": "^6.8.1",
+    "redis": "^4.6.14",
     "recharts": "^3.3.0",
     "zod": "^3.25.76"
   },
@@ -56,6 +58,7 @@
     "ts-node": "^10.9.2",
     "tslib": "^2.7.0",
     "tsx": "^4.20.6",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^1.6.0"
   }
 }

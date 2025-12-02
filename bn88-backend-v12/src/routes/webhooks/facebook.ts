@@ -2,9 +2,13 @@
 import { Router, type Request, type Response } from "express";
 import { prisma } from "../../lib/prisma";
 import { config } from "../../config";
-import { askPloy } from "../../services/ai";
-import { defaultSystemPrompt } from "../../services/prompt";
 import { sendFacebookMessage } from "../../services/facebook";
+import {
+  processIncomingMessage,
+  type SupportedPlatform,
+} from "../../services/inbound/processIncomingMessage";
+import { MessageType } from "@prisma/client";
+import { createRequestLogger, getRequestId } from "../../utils/logger";
 
 const router = Router();
 
@@ -33,36 +37,65 @@ type FbWebhookPayload = {
   entry?: FbEntry[];
 };
 
-/* ------------------------------ Classifier ------------------------------ */
+type FbAttachment = {
+  type?: string;
+  payload?: {
+    url?: string;
+    sticker_url?: string;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+};
 
-function classify(t0: string) {
-  const t = (t0 || "").toLowerCase();
+function mapFacebookMessage(msg?: FbMessaging["message"]) {
+  if (!msg) return null;
 
-  if (
-    ["ฝากไม่เข้า", "เครดิตไม่เข้า", "เติมไม่เข้า", "ฝากเงิน", "เติมเงิน", "ฝาก"].some(
-      (k) => t.includes(k)
-    )
-  )
-    return "deposit" as const;
+  const baseMeta = { mid: msg.mid } as Record<string, unknown>;
 
-  if (
-    ["ถอนไม่ได้", "ถอนเงิน", "ถอนช้า", "ถอนไม่ออก", "ถอน"].some((k) =>
-      t.includes(k)
-    )
-  )
-    return "withdraw" as const;
+  if (Array.isArray(msg.attachments) && msg.attachments.length > 0) {
+    const first = msg.attachments[0] as FbAttachment;
+    const attType = (first.type || "").toLowerCase();
+    const url =
+      (first.payload?.url as string | undefined) ||
+      (first.payload?.sticker_url as string | undefined) ||
+      undefined;
 
-  if (["ยืนยันตัวตน", "เอกสาร", "บัตรประชาชน", "kyc"].some((k) => t.includes(k)))
-    return "kyc" as const;
+    const meta = { ...baseMeta, attachment: first };
 
-  if (
-    ["สมัครสมาชิก", "สมัคร", "เปิดยูส", "เปิด user", "เปิดยูสเซอร์"].some((k) =>
-      t.includes(k)
-    )
-  )
-    return "register" as const;
+    if (attType === "image") {
+      return {
+        text: msg.text ?? "",
+        messageType: "IMAGE" as MessageType,
+        attachmentUrl: url,
+        attachmentMeta: meta,
+      };
+    }
 
-  return "other" as const;
+    if (attType === "file" || attType === "video" || attType === "audio") {
+      return {
+        text: msg.text ?? "",
+        messageType: "FILE" as MessageType,
+        attachmentUrl: url,
+        attachmentMeta: meta,
+      };
+    }
+
+    if (attType === "sticker") {
+      return {
+        text: msg.text ?? "",
+        messageType: "STICKER" as MessageType,
+        attachmentUrl: url,
+        attachmentMeta: meta,
+      };
+    }
+  }
+
+  return {
+    text: msg.text ?? "",
+    messageType: "TEXT" as MessageType,
+    attachmentUrl: undefined,
+    attachmentMeta: baseMeta,
+  };
 }
 
 /* -------------------------- Resolve Facebook Bot ------------------------ */
@@ -146,6 +179,8 @@ router.get("/", async (req: Request, res: Response) => {
 /* ------------------------------ Webhook POST ----------------------------- */
 
 router.post("/", async (req: Request, res: Response) => {
+  const requestId = getRequestId(req);
+  const log = createRequestLogger(requestId);
   try {
     const tenant =
       (req.headers["x-tenant"] as string) || config.TENANT_DEFAULT || "bn9";
@@ -159,16 +194,7 @@ router.post("/", async (req: Request, res: Response) => {
         .json({ ok: false, message: "facebook_bot_not_configured" });
     }
 
-    const {
-      botId,
-      pageAccessToken,
-      openaiApiKey,
-      systemPrompt,
-      model,
-      temperature,
-      topP,
-      maxTokens,
-    } = resolved;
+    const { botId, pageAccessToken } = resolved;
 
     const body = req.body as FbWebhookPayload;
 
@@ -178,117 +204,62 @@ router.post("/", async (req: Request, res: Response) => {
         .json({ ok: true, skipped: true, reason: "not_page_event" });
     }
 
-    let handled = false;
+    const platform: SupportedPlatform = "facebook";
+    const results: Array<Record<string, unknown>> = [];
 
     for (const entry of body.entry) {
       const list = entry.messaging ?? [];
       for (const ev of list) {
-        // โฟกัสเฉพาะ message ที่เป็น text
         const msg = ev.message;
-        if (!msg || typeof msg.text !== "string") continue;
+        if (!msg) {
+          results.push({ skipped: true, reason: "no_message" });
+          continue;
+        }
 
-        handled = true;
+        const mapped = mapFacebookMessage(msg);
+        if (!mapped) {
+          results.push({ skipped: true, reason: "unsupported_message" });
+          continue;
+        }
 
-        const psid = ev.sender.id; // user id
-        const text = msg.text;
-        const kind = classify(text);
+        const userId = ev.sender?.id || "unknown";
+        const platformMessageId = msg.mid || undefined;
 
-        // 1) บันทึกเคส
-        const createdCase = await prisma.caseItem.create({
-          data: {
-            tenant,
-            botId,
-            platform: "facebook",
-            userId: psid,
-            text,
-            kind,
-            meta: {
-              entryId: entry.id,
-              rawEvent: ev,
-            } as any,
-          },
-          select: { id: true },
+        const { reply, intent, isIssue } = await processIncomingMessage({
+          botId,
+          platform,
+          userId,
+          text: mapped.text ?? "",
+          messageType: mapped.messageType,
+          attachmentUrl: mapped.attachmentUrl ?? undefined,
+          attachmentMeta: mapped.attachmentMeta,
+          displayName: userId,
+          platformMessageId,
+          rawPayload: ev,
+          requestId,
         });
 
-        // 2) อัปเดต StatDaily
-        const dateKey = new Date().toISOString().slice(0, 10);
-        try {
-          await prisma.statDaily.upsert({
-            where: { botId_dateKey: { botId, dateKey } },
-            update: {
-              total: { increment: 1 },
-              text: { increment: 1 },
-            },
-            create: {
-              tenant,
-              botId,
-              dateKey,
-              total: 1,
-              text: 1,
-              follow: 0,
-              unfollow: 0,
-            },
-          });
-        } catch (err) {
-          console.error("[FACEBOOK statDaily upsert error]", err);
-        }
-
-        // 3) เตรียมข้อความตอบกลับ (AI ก่อน, ถ้าไม่มีค่อย fallback)
-        let answer = "";
-
-        if (openaiApiKey) {
+        let replied = false;
+        if (reply && pageAccessToken) {
           try {
-            answer = await askPloy({
-              openaiKey: openaiApiKey,
-              model,
-              systemPrompt: systemPrompt || defaultSystemPrompt,
-              userText: text,
-              temperature,
-              top_p: topP,
-              max_tokens: maxTokens,
-            });
-          } catch (aiErr) {
-            console.error("[FACEBOOK AI error]", aiErr);
+            replied = await sendFacebookMessage(pageAccessToken, userId, reply);
+          } catch (err) {
+            log.error("[FACEBOOK sendMessage error]", err);
           }
         }
 
-        // fallback ถ้าไม่มี AI หรือตอบ AI ล้มเหลว
-        if (!answer) {
-          if (kind === "deposit") {
-            answer = "รับเรื่องฝากไม่เข้าแล้วครับ กำลังตรวจสอบให้นะครับ 🙏";
-          } else if (kind === "withdraw") {
-            answer = "รับเรื่องถอนแล้วครับ กำลังตรวจสอบให้นะครับ 🙏";
-          } else if (kind === "kyc") {
-            answer = "รับเรื่องยืนยันตัวตนแล้วครับ กำลังตรวจสอบให้นะครับ 🙏";
-          } else if (kind === "register") {
-            answer = "รับเรื่องสมัครสมาชิกแล้วครับ เดี๋ยวแอดมินตรวจสอบให้นะครับ 🙏";
-          } else {
-            answer = "รับข้อความแล้วครับ แอดมินกำลังตรวจสอบให้นะครับ 🙏";
-          }
-        }
-
-        // 4) ส่งข้อความกลับไปที่ Facebook
-        if (answer && pageAccessToken) {
-          try {
-            await sendFacebookMessage(pageAccessToken, psid, answer);
-          } catch (sendErr) {
-            console.error("[FACEBOOK sendMessage error]", sendErr);
-          }
-        }
-
-        console.log("[FACEBOOK] handled message", {
-          caseId: createdCase.id,
-          psid,
-          kind,
-        });
+        results.push({ ok: true, replied, intent, isIssue });
       }
     }
 
-    return res.status(200).json({ ok: true, handled });
+    return res.status(200).json({ ok: true, results, requestId });
   } catch (e) {
-    console.error("[FACEBOOK WEBHOOK ERROR]", e);
-    return res.status(500).json({ ok: false, message: "internal_error" });
+    log.error("[FACEBOOK WEBHOOK ERROR]", e);
+    return res
+      .status(500)
+      .json({ ok: false, message: "internal_error", requestId });
   }
 });
 
 export default router;
+export { router as facebookWebhookRouter };

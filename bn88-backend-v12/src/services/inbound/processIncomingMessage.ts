@@ -2,34 +2,46 @@
 
 import { prisma } from "../../lib/prisma";
 import { getOpenAIClientForBot } from "../openai/getOpenAIClientForBot";
-import { sseHub } from "../../lib/sseHub";
-
-export type SupportedPlatform = "line" | "telegram" | "facebook";
+import { MessageType } from "@prisma/client";
+import { createRequestLogger } from "../../utils/logger";
+import {
+  ActionExecutionResult,
+  ActionItem,
+  normalizeActionMessage,
+  SupportedPlatform,
+  executeActions,
+  safeBroadcast,
+} from "../actions";
+export type { SupportedPlatform } from "../actions";
+import { ensureConversation } from "../conversation";
+import { findFaqAnswer } from "../faq";
 
 export type ProcessIncomingParams = {
   botId: string;
   platform: SupportedPlatform;
   userId: string;
   text: string;
+  messageType?: MessageType;
+  attachmentUrl?: string | null;
+  attachmentMeta?: unknown;
 
-  // สำหรับ LINE/Telegram/Facebook ใช้กัน duplicate + log meta
   displayName?: string;
   platformMessageId?: string;
   rawPayload?: unknown;
+  requestId?: string;
 };
 
 export type ProcessIncomingResult = {
   reply: string;
   intent: string;
   isIssue: boolean;
+  actions?: ActionExecutionResult[];
 };
 
-// Bot + relations ที่ pipeline นี้ต้องใช้
 type BotWithRelations = NonNullable<
   Awaited<ReturnType<typeof loadBotWithRelations>>
 >;
 
-// โหลด bot + secret + config + intents (และ preset ถ้าต้องใช้)
 async function loadBotWithRelations(botId: string) {
   if (!botId) return null;
 
@@ -47,18 +59,98 @@ async function loadBotWithRelations(botId: string) {
   });
 }
 
+type KnowledgeChunkLite = {
+  id: string;
+  docId: string;
+  docTitle: string;
+  content: string;
+};
+
+async function getRelevantKnowledgeForBotMessage(params: {
+  botId: string;
+  tenant: string;
+  text: string;
+  limit?: number;
+}): Promise<KnowledgeChunkLite[]> {
+  const { botId, tenant, text, limit = 5 } = params;
+
+  // แยก keyword แบบง่าย ๆ จากข้อความลูกค้า (ไม่ต้องพึ่ง vector DB)
+  const keywords = text
+    .split(/\s+/)
+    .map((w) => w.toLowerCase().replace(/[^\p{L}\p{N}]/gu, ""))
+    .filter((w) => w.length >= 3)
+    .slice(0, 5);
+
+  const whereClause: any = {
+    doc: {
+      tenant,
+      status: "active",
+      bots: { some: { botId } },
+    },
+  };
+
+  if (keywords.length > 0) {
+    whereClause.OR = keywords.map((kw) => ({ content: { contains: kw } }));
+  }
+
+  const chunks = await prisma.knowledgeChunk.findMany({
+    where: whereClause,
+    include: {
+      doc: {
+        select: {
+          id: true,
+          title: true,
+        },
+      },
+    },
+    orderBy: [
+      { updatedAt: "desc" },
+      { createdAt: "desc" },
+    ],
+    take: limit,
+  });
+
+  return chunks.map((chunk) => ({
+    id: chunk.id,
+    docId: chunk.doc.id,
+    docTitle: chunk.doc.title,
+    content: chunk.content,
+  }));
+}
+
+function buildKnowledgeSummary(chunks: KnowledgeChunkLite[]): {
+  summary: string;
+  docIds: string[];
+  chunkIds: string[];
+} {
+  if (chunks.length === 0) {
+    return { summary: "", docIds: [], chunkIds: [] };
+  }
+
+  const lines: string[] = [];
+  let totalLength = 0;
+  const maxTotalLength = 1800;
+  const maxChunkLength = 360;
+
+  for (const chunk of chunks) {
+    if (totalLength >= maxTotalLength) break;
+
+    const content = chunk.content.slice(0, maxChunkLength);
+    const line = `- [doc: ${chunk.docTitle}] ${content}`;
+    totalLength += line.length;
+    lines.push(line);
+  }
+
+  return {
+    summary: lines.join("\n"),
+    docIds: Array.from(new Set(chunks.map((c) => c.docId))),
+    chunkIds: chunks.map((c) => c.id),
+  };
+}
+
 function todayKey(): string {
   // YYYY-MM-DD (ใช้เป็น key ของ StatDaily)
   return new Date().toISOString().slice(0, 10);
-}
-
-function safeBroadcast(event: any) {
-  try {
-    // ตรงนี้อิงสัญญาเดิมว่า sseHub มีเมธอด broadcast(event)
-    (sseHub as any).broadcast?.(event);
-  } catch (err) {
-    console.warn("[inbound] SSE broadcast error", err);
-  }
 }
 
 export async function processIncomingMessage(
@@ -72,7 +164,10 @@ export async function processIncomingMessage(
     displayName,
     platformMessageId,
     rawPayload,
+    requestId,
   } = params;
+
+  const log = createRequestLogger(requestId);
 
   // ถ้าข้อความว่าง ให้ตอบ fallback เลย (กันเคสส่งมาเป็น empty)
   if (!text || !text.trim()) {
@@ -80,6 +175,7 @@ export async function processIncomingMessage(
       reply: "ขออภัยค่ะ ระบบขัดข้องชั่วคราว ลองใหม่อีกครั้งภายหลังนะคะ",
       intent: "other",
       isIssue: false,
+      actions: [],
     };
   }
 
@@ -88,7 +184,14 @@ export async function processIncomingMessage(
     reply: "ขออภัยค่ะ ระบบขัดข้องชั่วคราว ลองใหม่อีกครั้งภายหลังนะคะ",
     intent: "other",
     isIssue: false,
+    actions: [],
   };
+
+  let actionResults: ActionExecutionResult[] = [];
+  let aiActions: ActionItem[] = [];
+  let skipAi = false;
+  let faqMeta: { faqId: string } | null = null;
+  let faqAnswer: string | null = null;
 
   try {
     const bot = await loadBotWithRelations(botId);
@@ -127,6 +230,14 @@ export async function processIncomingMessage(
       },
     });
 
+    const conversation = await ensureConversation({
+      botId: bot.id,
+      tenant: bot.tenant,
+      userId,
+      platform,
+      requestId,
+    });
+
     // 2) กัน duplicate message ด้วย platformMessageId
     if (platformMessageId) {
       const dup = await prisma.chatMessage.findFirst({
@@ -152,6 +263,9 @@ export async function processIncomingMessage(
       }
     }
 
+    const incomingType: MessageType = params.messageType ?? "TEXT";
+    const safeText = text?.trim() || (incomingType !== "TEXT" ? `[${incomingType.toLowerCase()}]` : "");
+
     // 3) บันทึกข้อความฝั่ง user → ChatMessage
     const userChatMessage = await prisma.chatMessage.create({
       data: {
@@ -159,9 +273,12 @@ export async function processIncomingMessage(
         botId: bot.id,
         platform,
         sessionId: session.id,
+        conversationId: conversation.id,
         senderType: "user",
-        messageType: "text",
-        text,
+        type: incomingType,
+        text: safeText,
+        attachmentUrl: params.attachmentUrl ?? null,
+        attachmentMeta: params.attachmentMeta ?? undefined,
         platformMessageId: platformMessageId ?? null,
         meta: {
           source: platform,
@@ -172,6 +289,10 @@ export async function processIncomingMessage(
         id: true,
         createdAt: true,
         text: true,
+        type: true,
+        conversationId: true,
+        attachmentUrl: true,
+        attachmentMeta: true,
       },
     });
 
@@ -181,18 +302,35 @@ export async function processIncomingMessage(
       tenant: bot.tenant,
       botId: bot.id,
       sessionId: session.id,
+      conversationId: conversation.id,
       message: {
         id: userChatMessage.id,
         senderType: "user",
         text: userChatMessage.text,
+        type: userChatMessage.type,
+        attachmentUrl: userChatMessage.attachmentUrl,
+        attachmentMeta: userChatMessage.attachmentMeta,
         createdAt: userChatMessage.createdAt,
       },
     });
 
+    // ถ้าไม่ใช่ข้อความ text ให้หยุดที่นี่ (ไม่ต้องเรียก AI)
+    if (incomingType !== "TEXT") {
+      return { reply: "", intent: "non_text", isIssue: false, actions: [] };
+    }
+
+    // ตรวจ FAQ แบบรวดเร็ว หากเจอให้ตอบทันทีและไม่เรียก AI
+    const faq = await findFaqAnswer(bot.id, safeText, requestId);
+    if (faq) {
+      skipAi = true;
+      faqMeta = { faqId: faq.faqId };
+      faqAnswer = faq.answer;
+    }
+
     // 4) เตรียม client OpenAI ตาม secret/config ของบอท
     let openai;
     try {
-      openai = getOpenAIClientForBot(bot as BotWithRelations);
+      openai = skipAi ? null : getOpenAIClientForBot(bot as BotWithRelations);
     } catch (err) {
       console.error(
         "[processIncomingMessage] getOpenAIClientForBot error",
@@ -200,6 +338,24 @@ export async function processIncomingMessage(
       );
       // ถ้าไม่มี key หรือสร้าง client ไม่ได้ → ตอบ fallback เลย
       return fallback;
+    }
+
+    // 4.1) ดึง knowledge ที่เกี่ยวข้องกับข้อความนี้ (ถ้ามี)
+    const knowledgeChunks = await getRelevantKnowledgeForBotMessage({
+      botId: bot.id,
+      tenant: bot.tenant,
+      text,
+    });
+
+    const { summary: knowledgeSummary, docIds: knowledgeDocIds, chunkIds } =
+      buildKnowledgeSummary(knowledgeChunks);
+
+    if (knowledgeChunks.length > 0) {
+      console.log("[processIncomingMessage] knowledge", {
+        botId: bot.id,
+        docs: knowledgeDocIds,
+        chunks: chunkIds.slice(0, 10),
+      });
     }
 
     // 5) เตรียม intents สำหรับส่งเข้า prompt
@@ -248,19 +404,36 @@ ${intentsForPrompt}
 
     const model = bot.config.model || "gpt-4o-mini";
 
-    // 6) เรียก OpenAI ให้จัด intent + บทตอบ
-    const completion = await openai.chat.completions.create({
-      model,
-      temperature: bot.config.temperature ?? 0.4,
-      top_p: bot.config.topP ?? 1,
-      max_tokens: bot.config.maxTokens ?? 800,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: text },
-      ],
-    });
+    let rawContent: any = "{}";
+    if (!skipAi && openai) {
+      // 6) เรียก OpenAI ให้จัด intent + บทตอบ
+      const completion = await openai.chat.completions.create({
+        model,
+        temperature: bot.config.temperature ?? 0.4,
+        top_p: bot.config.topP ?? 1,
+        max_tokens: bot.config.maxTokens ?? 800,
+        messages: [
+          { role: "system", content: systemPrompt },
+          knowledgeSummary
+            ? {
+                role: "system",
+                content:
+                  "นี่คือข้อมูลภายใน (Knowledge Base) ที่ต้องใช้ตอบลูกค้า ถ้าคำถามเกี่ยวข้องให้ยึดข้อมูลนี้เป็นหลัก:\n" +
+                  knowledgeSummary,
+              }
+            : null,
+          { role: "user", content: text },
+        ].filter(Boolean) as any,
+      });
 
-    let rawContent: any = completion.choices[0]?.message?.content ?? "{}";
+      rawContent = completion.choices[0]?.message?.content ?? "{}";
+    } else if (skipAi) {
+      rawContent = JSON.stringify({
+        reply: faqAnswer ?? safeText,
+        intent: "faq",
+        isIssue: false,
+      });
+    }
 
     // กรณี content เป็น array (รองรับ format บางแบบของ lib)
     if (Array.isArray(rawContent)) {
@@ -275,6 +448,7 @@ ${intentsForPrompt}
       reply: "ขอบคุณสำหรับข้อมูลค่ะ",
       intent: "other",
       isIssue: false,
+      actions: [],
     };
 
     try {
@@ -287,7 +461,10 @@ ${intentsForPrompt}
             : "ขอบคุณสำหรับข้อมูลค่ะ",
         intent: typeof json.intent === "string" ? json.intent : "other",
         isIssue: Boolean(json.isIssue),
+        actions: [],
       };
+
+      aiActions = Array.isArray(json.actions) ? (json.actions as ActionItem[]) : [];
     } catch (err) {
       console.error(
         "[processIncomingMessage] JSON parse error from GPT",
@@ -428,8 +605,9 @@ ${intentsForPrompt}
             botId: bot.id,
             platform,
             sessionId: session.id,
+            conversationId: conversation.id,
             senderType: "bot",
-            messageType: "text",
+            type: "TEXT",
             text: reply,
             meta: {
               source: platform,
@@ -437,11 +615,17 @@ ${intentsForPrompt}
               intent,
               isIssue,
               caseId,
+              usedKnowledge: knowledgeChunks.length > 0,
+              knowledgeDocIds,
+              knowledgeChunkIds: chunkIds,
+              faqId: faqMeta?.faqId ?? null,
             },
           },
           select: {
             id: true,
             text: true,
+            type: true,
+            conversationId: true,
             createdAt: true,
           },
         });
@@ -451,10 +635,12 @@ ${intentsForPrompt}
           tenant: bot.tenant,
           botId: bot.id,
           sessionId: session.id,
+          conversationId: conversation.id,
           message: {
             id: botChatMessage.id,
             senderType: "bot",
             text: botChatMessage.text,
+            type: botChatMessage.type,
             createdAt: botChatMessage.createdAt,
           },
         });
@@ -466,13 +652,27 @@ ${intentsForPrompt}
       }
     }
 
-    return { reply, intent, isIssue };
+    const actionsToRun = aiActions;
+
+    if (actionsToRun.length > 0) {
+      actionResults = await executeActions(actionsToRun, {
+        bot: bot as BotWithRelations,
+        session,
+        conversation,
+        platform,
+        userId,
+        requestId,
+        log,
+      });
+    }
+
+    return { reply, intent, isIssue, actions: actionResults };
   } catch (err) {
     console.error(
       "[processIncomingMessage] fatal error",
       (err as any)?.message ?? err
     );
     // อย่าโยน error ออกไป ให้ส่ง fallback กลับ
-    return fallback;
+    return { ...fallback, actions: actionResults };
   }
 }
