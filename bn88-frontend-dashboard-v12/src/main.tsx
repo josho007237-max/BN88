@@ -15,6 +15,8 @@ import BotsPage from "./pages/Bots";
 import BotDetail from "./pages/BotDetail";
 import Login from "./pages/Login";
 import ChatCenter from "./pages/ChatCenter";
+import Knowledge from "./pages/Knowledge";
+import MarketingLep from "./pages/MarketingLep";
 import "./index.css";
 
 // ใช้ key เดียวกับ lib/api.ts
@@ -126,6 +128,22 @@ const router = createBrowserRouter([
         element: (
           <RequireAuth>
             <ChatCenter />
+          </RequireAuth>
+        ),
+      },
+      {
+        path: "knowledge",
+        element: (
+          <RequireAuth>
+            <Knowledge />
+          </RequireAuth>
+        ),
+      },
+      {
+        path: "marketing-lep",
+        element: (
+          <RequireAuth>
+            <MarketingLep />
           </RequireAuth>
         ),
       },

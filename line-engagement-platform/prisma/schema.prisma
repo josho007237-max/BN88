@@ -1,0 +1,88 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Audience {
+  id            String    @id @default(cuid())
+  lineUserId    String    @unique
+  displayName   String?
+  locale        String?
+  tags          String[]
+  lastActiveAt  DateTime? @db.Timestamptz
+  createdAt     DateTime  @default(now()) @db.Timestamptz
+  updatedAt     DateTime  @updatedAt @db.Timestamptz
+
+  events        Event[]
+  deliveries    CampaignDelivery[]
+}
+
+model Event {
+  id           String    @id @default(cuid())
+  type         String
+  payload      Json
+  occurredAt   DateTime  @default(now()) @db.Timestamptz
+
+  audienceId   String?
+  audience     Audience? @relation(fields: [audienceId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+}
+
+model Campaign {
+  id            String    @id @default(cuid())
+  externalId    String?   @unique
+  name          String
+  message       String
+  status        String    @default("draft")
+  totalTargets  Int?
+  sentCount     Int       @default(0)
+  failedCount   Int       @default(0)
+  scheduleStart DateTime? @db.Timestamptz
+  scheduleEnd   DateTime? @db.Timestamptz
+  cron          String?
+  enabled       Boolean   @default(true)
+  segmentType   String?
+  segmentQuery  Json?
+  messagePayload Json?
+  createdAt     DateTime  @default(now()) @db.Timestamptz
+  updatedAt     DateTime  @updatedAt @db.Timestamptz
+
+  deliveries    CampaignDelivery[]
+  schedules     CampaignSchedule[]
+}
+
+model CampaignDelivery {
+  id           String    @id @default(cuid())
+  campaignId   String
+  audienceId   String
+  status       String
+  sentAt       DateTime? @db.Timestamptz
+  error        String?
+
+  campaign     Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  audience     Audience  @relation(fields: [audienceId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+  @@index([audienceId])
+}
+
+model CampaignSchedule {
+  id             String    @id @default(cuid())
+  campaignId     String
+  cron           String
+  timezone       String
+  startAt        DateTime? @db.Timestamptz
+  endAt          DateTime? @db.Timestamptz
+  enabled        Boolean   @default(true)
+  repeatJobKey   String?   @unique
+  idempotencyKey String?   @unique
+  createdAt      DateTime  @default(now()) @db.Timestamptz
+  updatedAt      DateTime  @updatedAt @db.Timestamptz
+
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId])
+}

@@ -9,6 +9,7 @@ import type { Bot } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import { z } from "zod";
 import { sseHub } from "../../lib/sseHub";
+import { requirePermission } from "../../middleware/basicAuth";
 
 /* -------------------------------------------------------------------------- */
 /*                          AI Model & Config defaults                        */
@@ -76,7 +77,7 @@ async function findBot(
 /* -------------------------------------------------------------------------- */
 
 // GET /api/admin/bots
-router.get("/", async (_req: Request, res: Response) => {
+router.get("/", requirePermission(["manageBots"]), async (_req: Request, res: Response) => {
   try {
     const items = await prisma.bot.findMany({
       orderBy: { createdAt: "desc" },
@@ -99,13 +100,14 @@ router.get("/", async (_req: Request, res: Response) => {
 });
 
 // GET /api/admin/bots/:id
-router.get("/:id", findBot, (req: Request, res: Response) => {
+router.get("/:id", requirePermission(["manageBots"]), findBot, (req: Request, res: Response) => {
   return res.json({ ok: true, bot: (req as RequestWithBot).bot as Bot });
 });
 
 // PATCH /api/admin/bots/:id
 router.patch(
   "/:id",
+  requirePermission(["manageBots"]),
   findBot,
   async (req: Request, res: Response): Promise<any> => {
     try {
@@ -157,7 +159,7 @@ router.patch(
 );
 
 // POST /api/admin/bots/init
-router.post("/init", async (_req: Request, res: Response) => {
+router.post("/init", requirePermission(["manageBots"]), async (_req: Request, res: Response) => {
   try {
     const TENANT = "bn9";
     const NAME = "admin-bot-001";
@@ -213,6 +215,34 @@ router.post("/init", async (_req: Request, res: Response) => {
 /*                                   Secrets                                  */
 /* -------------------------------------------------------------------------- */
 
+const MASK = "********";
+
+const secretsSchema = z
+  .object({
+    openaiApiKey: z.string().min(1).max(200).trim().optional(),
+    openAiApiKey: z.string().min(1).max(200).trim().optional(), // alias casing
+    lineAccessToken: z.string().min(1).max(500).trim().optional(),
+    lineChannelSecret: z.string().min(1).max(200).trim().optional(),
+
+    // backwards-compatible aliases
+    openaiKey: z.string().min(1).max(200).trim().optional(),
+    lineSecret: z.string().min(1).max(200).trim().optional(),
+  })
+  .refine(
+    (v) =>
+      Boolean(
+        v.openaiApiKey ||
+          v.openAiApiKey ||
+          v.openaiKey ||
+          v.lineAccessToken ||
+          v.lineChannelSecret ||
+          v.lineSecret
+      ),
+    {
+      message: "at_least_one_field_required",
+    }
+  );
+
 // GET /api/admin/bots/:id/secrets
 router.get("/:id/secrets", findBot, async (req: Request, res: Response) => {
   try {
@@ -221,9 +251,9 @@ router.get("/:id/secrets", findBot, async (req: Request, res: Response) => {
 
     return res.json({
       ok: true,
-      lineAccessToken: sec?.channelAccessToken ? "********" : "",
-      lineChannelSecret: sec?.channelSecret ? "********" : "",
-      openaiApiKey: sec?.openaiApiKey ? "********" : "",
+      lineAccessToken: sec?.channelAccessToken ? MASK : "",
+      lineChannelSecret: sec?.channelSecret ? MASK : "",
+      openaiApiKey: sec?.openaiApiKey ? MASK : "",
     });
   } catch (err) {
     console.error("GET /admin/bots/:id/secrets error:", err);
@@ -234,16 +264,29 @@ router.get("/:id/secrets", findBot, async (req: Request, res: Response) => {
 // POST /api/admin/bots/:id/secrets
 router.post("/:id/secrets", findBot, async (req: Request, res: Response) => {
   try {
-    const { openaiApiKey, lineAccessToken, lineChannelSecret } = req.body as {
-      openaiApiKey?: string | null;
-      lineAccessToken?: string | null;
-      lineChannelSecret?: string | null;
-    };
+    const parsed = secretsSchema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      return res.status(400).json({
+        ok: false,
+        message: "invalid_input",
+        issues: parsed.error.issues,
+      });
+    }
 
-    const sanitize = (s?: string | null) =>
-      typeof s === "string" && s.trim() && s.trim() !== "******"
-        ? s.trim()
-        : undefined;
+    const { bot } = req as RequestWithBot;
+    if (!bot) {
+      return res.status(404).json({ ok: false, message: "bot_not_found" });
+    }
+
+    const payload = parsed.data;
+    const botId = bot.id;
+
+    const norm = {
+      openaiApiKey:
+        payload.openaiApiKey ?? payload.openAiApiKey ?? payload.openaiKey,
+      lineAccessToken: payload.lineAccessToken,
+      lineChannelSecret: payload.lineChannelSecret ?? payload.lineSecret,
+    };
 
     const update: {
       openaiApiKey?: string | null;
@@ -251,24 +294,18 @@ router.post("/:id/secrets", findBot, async (req: Request, res: Response) => {
       channelSecret?: string | null;
     } = {};
 
-    const oa = sanitize(openaiApiKey);
-    const lat = sanitize(lineAccessToken);
-    const lcs = sanitize(lineChannelSecret);
-
-    if (oa !== undefined) update.openaiApiKey = oa;
-    if (lat !== undefined) update.channelAccessToken = lat;
-    if (lcs !== undefined) update.channelSecret = lcs;
-
-    const botId = req.params.id;
+    if (norm.openaiApiKey) update.openaiApiKey = norm.openaiApiKey;
+    if (norm.lineAccessToken) update.channelAccessToken = norm.lineAccessToken;
+    if (norm.lineChannelSecret) update.channelSecret = norm.lineChannelSecret;
 
     const secretRow = await prisma.botSecret.upsert({
       where: { botId },
       update,
       create: {
         bot: { connect: { id: botId } },
-        openaiApiKey: update.openaiApiKey ?? null,
-        channelAccessToken: update.channelAccessToken ?? null,
-        channelSecret: update.channelSecret ?? null,
+        openaiApiKey: norm.openaiApiKey ?? null,
+        channelAccessToken: norm.lineAccessToken ?? null,
+        channelSecret: norm.lineChannelSecret ?? null,
       },
       select: {
         channelAccessToken: true,
@@ -295,7 +332,15 @@ router.post("/:id/secrets", findBot, async (req: Request, res: Response) => {
       });
     }
 
-    return res.json({ ok: true, botId });
+    return res.json({
+      ok: true,
+      botId,
+      saved: {
+        openaiApiKey: Boolean(secretRow.openaiApiKey),
+        lineAccessToken: Boolean(secretRow.channelAccessToken),
+        lineChannelSecret: Boolean(secretRow.channelSecret),
+      },
+    });
   } catch (err) {
     console.error("POST /admin/bots/:id/secrets error:", err);
     return res.status(500).json({ ok: false, message: "internal_error" });

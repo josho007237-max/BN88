@@ -39,7 +39,7 @@ if (isDev) {
   prisma
     .$connect()
     .then(() => console.log("[prisma] connected"))
-    .catch((err) => console.error("[prisma] connect error:", err));
+    .catch((err: any) => console.error("[prisma] connect error:", err));
 }
 
 /** Graceful shutdown (ลงทะเบียนครั้งเดียวต่อโปรเซส) */

@@ -17,6 +17,49 @@ model AdminUser {
   password  String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  roles AdminUserRole[]
+}
+
+model Role {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  admins      AdminUserRole[]
+  permissions RolePermission[]
+}
+
+model Permission {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  roles RolePermission[]
+}
+
+model AdminUserRole {
+  adminId String
+  roleId  String
+  admin   AdminUser @relation(fields: [adminId], references: [id], onDelete: Cascade)
+  role    Role      @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  assignedAt DateTime @default(now())
+
+  @@id([adminId, roleId])
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+  createdAt    DateTime   @default(now())
+
+  @@id([roleId, permissionId])
 }
 
 model Bot {
@@ -37,6 +80,9 @@ model Bot {
   intents       BotIntent[] // ✅ relation ไปยัง Intent
   chatSessions  ChatSession[]
   chatMessages  ChatMessage[]
+  conversations Conversation[]
+  faqs               FAQ[]
+  engagementMessages EngagementMessage[]
 
   @@unique([tenant, name], name: "tenant_name")
 }
@@ -274,6 +320,21 @@ model ChatSession {
   @@index([botId, platform, lastMessageAt], map: "ChatSession_list_index")
 }
 
+model Conversation {
+  id        String @id @default(uuid())
+  tenant    String
+  bot       Bot    @relation(fields: [botId], references: [id])
+  botId     String
+  userId    String
+  platform  String
+  messages  ChatMessage[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([botId, userId], map: "Conversation_botId_userId_unique")
+  @@index([botId, createdAt], map: "Conversation_bot_createdAt")
+}
+
 model ChatMessage {
   id     String @id @default(cuid())
   tenant String
@@ -283,12 +344,17 @@ model ChatMessage {
 
   platform String // "line" | "telegram" | ...
 
-  session   ChatSession @relation(fields: [sessionId], references: [id])
-  sessionId String
+  session   ChatSession? @relation(fields: [sessionId], references: [id])
+  sessionId String?
+
+  conversation   Conversation? @relation(fields: [conversationId], references: [id])
+  conversationId String?
 
   senderType        String // "user" | "bot" | "admin"
-  messageType       String // "text" | "image" | ...
-  text              String?
+  type              MessageType @default(TEXT)
+  text              String      @default("")
+  attachmentUrl     String?
+  attachmentMeta    Json?
   platformMessageId String? // id ของข้อความจาก platform
   meta              Json?
 
@@ -296,4 +362,104 @@ model ChatMessage {
 
   @@unique([sessionId, platformMessageId], map: "ChatMessage_session_platformMsg_unique")
   @@index([sessionId, createdAt], map: "ChatMessage_bySession")
+  @@index([conversationId, createdAt], map: "ChatMessage_byConversation")
+}
+
+model LiveStream {
+  id          String       @id @default(uuid())
+  channelId   String
+  title       String
+  description String?
+  status      String       @default("live")
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+  questions   LiveQuestion[]
+  polls       LivePoll[]
+}
+
+model LiveQuestion {
+  id           String     @id @default(uuid())
+  liveStreamId String
+  userId       String?
+  question     String
+  answered     Boolean    @default(false)
+  createdAt    DateTime   @default(now())
+  liveStream   LiveStream @relation(fields: [liveStreamId], references: [id])
+}
+
+model LivePoll {
+  id           String     @id @default(uuid())
+  liveStreamId String
+  question     String
+  options      Json
+  results      Json?
+  closed       Boolean    @default(false)
+  createdAt    DateTime   @default(now())
+  liveStream   LiveStream @relation(fields: [liveStreamId], references: [id])
+}
+
+model FAQ {
+  id        String   @id @default(uuid())
+  botId     String
+  question  String
+  answer    String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  bot Bot @relation(fields: [botId], references: [id])
+
+  @@index([botId], map: "FAQ_botId")
+}
+
+model EngagementMessage {
+  id         String   @id @default(uuid())
+  botId      String
+  platform   String   @default("line")
+  channelId  String
+  text       String
+  interval   Int
+  enabled    Boolean  @default(true)
+  type       String   @default("text")
+  meta       Json?
+  lastSentAt DateTime?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  bot Bot @relation(fields: [botId], references: [id])
+
+  @@index([botId, platform, channelId], map: "EngagementMessage_channel")
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  FILE
+  STICKER
+  SYSTEM
+  RICH
+  INLINE_KEYBOARD
+}
+
+model CampaignSchedule {
+  id             String   @id @default(cuid())
+  campaignId     String
+  cronExpr       String
+  timezone       String
+  status         CampaignScheduleStatus @default(ACTIVE)
+  startAt        DateTime?
+  endAt          DateTime?
+  idempotencyKey String? @unique
+  lastRunAt      DateTime?
+  nextRunAt      DateTime?
+  meta           Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([campaignId], map: "CampaignSchedule_campaignId")
+}
+
+enum CampaignScheduleStatus {
+  ACTIVE
+  PAUSED
+  DISABLED
 }

@@ -6,7 +6,7 @@ import { prisma } from "../lib/prisma";
 const router = Router();
 
 /** GET /api/admin/bots */
-router.get("/bots", async (_req, res) => {
+router.get("/bots", async (_req: Request, res: Response) => {
   try {
     const items = await prisma.bot.findMany({
       orderBy: { createdAt: "desc" },
@@ -23,7 +23,7 @@ router.get("/bots", async (_req, res) => {
 });
 
 /** POST /api/admin/bots/init */
-router.post("/bots/init", async (_req, res) => {
+router.post("/bots/init", async (_req: Request, res: Response) => {
   const tenant = "bn9";
   const name = "admin-bot-001";
   try {
@@ -43,7 +43,7 @@ router.post("/bots/init", async (_req, res) => {
 });
 
 /** PATCH /api/admin/bots/:id */
-router.patch("/bots/:id", async (req, res) => {
+router.patch("/bots/:id", async (req: Request, res: Response) => {
   const id = req.params.id;
   const body = req.body ?? {};
   const data: Prisma.BotUpdateInput = {};
@@ -60,7 +60,7 @@ router.patch("/bots/:id", async (req, res) => {
 });
 
 /** DELETE /api/admin/bots/:id */
-router.delete("/bots/:id", async (req, res) => {
+router.delete("/bots/:id", async (req: Request, res: Response) => {
   try {
     await prisma.bot.delete({ where: { id: req.params.id } });
     res.json({ ok: true });
@@ -71,7 +71,7 @@ router.delete("/bots/:id", async (req, res) => {
 });
 
 /** GET /api/admin/bots/:id/secrets */
-router.get("/bots/:id/secrets", async (req, res) => {
+router.get("/bots/:id/secrets", async (req: Request, res: Response) => {
   const botId = req.params.id;
   const sec = await prisma.botSecret.findUnique({ where: { botId } });
   res.json({
@@ -83,7 +83,7 @@ router.get("/bots/:id/secrets", async (req, res) => {
 });
 
 /** POST /api/admin/bots/:id/secrets */
-router.post("/bots/:id/secrets", async (req, res) => {
+router.post("/bots/:id/secrets", async (req: Request, res: Response) => {
   const botId = req.params.id;
   const { openaiApiKey, lineAccessToken, lineChannelSecret } = (req.body ?? {}) as {
     openaiApiKey?: string | null;

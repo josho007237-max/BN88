@@ -4,7 +4,7 @@ import { config } from "../config";
 
 export const getJwtSecret = (): Secret => config.JWT_SECRET;
 
-export const signJwt = (payload: string | object | Buffer, options?: SignOptions): string => {
+export const signJwt = (payload: any, options?: SignOptions): string => {
   return jwt.sign(payload, getJwtSecret(), options);
 };
 

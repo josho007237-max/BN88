@@ -5,7 +5,7 @@ import axios from "axios";
  * HTTP client สำหรับให้ backend เรียก API อื่น (ถ้าจำเป็น)
  * ตอนนี้ใช้ ADMIN_API_BASE จาก environment ถ้าไม่ตั้งจะเป็น "" (ไม่ถูกใช้ก็ได้)
  */
-export const API = axios.create({
+export const API: any = axios.create({
   baseURL: process.env.ADMIN_API_BASE || "",
   timeout: 15000,
 });
@@ -36,10 +36,10 @@ export type BotAiConfigResponse = {
 export async function getBotConfig(
   botId: string
 ): Promise<BotAiConfigResponse> {
-  const res = await API.get<BotAiConfigResponse>(
+  const res = await API.get(
     `/api/admin/bots/${encodeURIComponent(botId)}/config`
   );
-  return res.data;
+  return res.data as BotAiConfigResponse;
 }
 
 /**
@@ -49,9 +49,9 @@ export async function updateBotConfig(
   botId: string,
   payload: Partial<BotAiConfig>
 ): Promise<BotAiConfigResponse> {
-  const res = await API.put<BotAiConfigResponse>(
+  const res = await API.put(
     `/api/admin/bots/${encodeURIComponent(botId)}/config`,
     payload
   );
-  return res.data;
+  return res.data as BotAiConfigResponse;
 }
