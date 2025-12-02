@@ -1,65 +1,42 @@
- codex/analyze-bn88-project-structure-and-workflow-s9ghbu
-import { Queue, JobsOptions } from 'bullmq';
-
-import { Queue } from 'bullmq';
- main
-import { env } from '../config/env';
+// src/queues/message.queue.ts
+import { Queue, JobsOptions } from "bullmq";
+import { env } from "../config/env";
 
 const connection = {
   host: env.REDIS_HOST,
   port: env.REDIS_PORT,
 };
 
-export const messageQueue = new Queue('messages', { connection });
-
- codex/analyze-bn88-project-structure-and-workflow-s9ghbu
-const baseOptions = (payload: { attempts?: number } = {}): JobsOptions => ({
-  attempts: payload.attempts ?? 3,
-  backoff: { type: 'exponential', delay: 5000 },
-  removeOnComplete: 1000,
-  removeOnFail: 1000,
-});
-
-
- main
-export const enqueueMessage = async (payload: {
+export type MessageJobPayload = {
   to: string;
   messages: any[];
   campaignId?: string;
   audienceId?: string;
   attempts?: number;
-codex/analyze-bn88-project-structure-and-workflow-s9ghbu
-  idempotencyKey?: string;
-}) => {
-  return messageQueue.add('send', payload, {
-    ...baseOptions(payload),
-    jobId: payload.idempotencyKey,
-  });
 };
 
-export const scheduleMessage = async (payload: {
-  to: string;
-  messages: any[];
-  campaignId?: string;
-  audienceId?: string;
-  cron: string;
-  timezone: string;
-  idempotencyKey?: string;
-}) => {
-  return messageQueue.add('send', payload, {
-    ...baseOptions(payload),
-    jobId: payload.idempotencyKey,
-    repeat: {
-      pattern: payload.cron,
-      tz: payload.timezone,
-    },
+export const messageQueue = new Queue<MessageJobPayload>("messages", {
+  connection,
+});
 
-}) => {
-  return messageQueue.add('send', payload, {
+/**
+ * enqueue งานส่งข้อความจริง
+ * - รองรับ opts.idempotencyKey → map ไปที่ jobId (กันซ้ำ)
+ */
+export const enqueueMessage = async (
+  payload: MessageJobPayload,
+  opts?: { idempotencyKey?: string }
+) => {
+  const jobOptions: JobsOptions = {
     attempts: payload.attempts ?? 3,
-    backoff: { type: 'exponential', delay: 5000 },
+    backoff: { type: "exponential", delay: 5000 },
     removeOnComplete: 1000,
     removeOnFail: 1000,
- main
-  });
+  };
+
+  if (opts?.idempotencyKey) {
+    jobOptions.jobId = opts.idempotencyKey;
+  }
+
+  return messageQueue.add("send", payload, jobOptions);
 };

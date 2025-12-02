@@ -9,7 +9,6 @@ import type { Bot } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import { z } from "zod";
 import { sseHub } from "../../lib/sseHub";
-import { requirePermission } from "../../middleware/basicAuth";
 
 /* -------------------------------------------------------------------------- */
 /*                          AI Model & Config defaults                        */
@@ -54,7 +53,9 @@ async function findBot(
   res: Response,
   next: NextFunction
 ) {
+  // รองรับทั้ง /:id/... และ /:botId/...
   const botId = (req.params.id ?? req.params.botId) as string | undefined;
+
   if (!botId || typeof botId !== "string") {
     return res.status(400).json({ ok: false, message: "missing_botId" });
   }
@@ -77,7 +78,7 @@ async function findBot(
 /* -------------------------------------------------------------------------- */
 
 // GET /api/admin/bots
-router.get("/", requirePermission(["manageBots"]), async (_req: Request, res: Response) => {
+router.get("/", async (_req: Request, res: Response) => {
   try {
     const items = await prisma.bot.findMany({
       orderBy: { createdAt: "desc" },
@@ -100,14 +101,13 @@ router.get("/", requirePermission(["manageBots"]), async (_req: Request, res: Re
 });
 
 // GET /api/admin/bots/:id
-router.get("/:id", requirePermission(["manageBots"]), findBot, (req: Request, res: Response) => {
+router.get("/:id", findBot, (req: Request, res: Response) => {
   return res.json({ ok: true, bot: (req as RequestWithBot).bot as Bot });
 });
 
 // PATCH /api/admin/bots/:id
 router.patch(
   "/:id",
-  requirePermission(["manageBots"]),
   findBot,
   async (req: Request, res: Response): Promise<any> => {
     try {
@@ -116,6 +116,7 @@ router.patch(
         active: z.boolean().optional(),
         verifiedAt: z.string().datetime().nullable().optional(),
       });
+
       const parsed = schema.safeParse(req.body);
       if (!parsed.success) {
         return res.status(400).json({
@@ -159,7 +160,7 @@ router.patch(
 );
 
 // POST /api/admin/bots/init
-router.post("/init", requirePermission(["manageBots"]), async (_req: Request, res: Response) => {
+router.post("/init", async (_req: Request, res: Response) => {
   try {
     const TENANT = "bn9";
     const NAME = "admin-bot-001";
@@ -317,6 +318,7 @@ router.post("/:id/secrets", findBot, async (req: Request, res: Response) => {
     const hasLine =
       Boolean(secretRow.channelAccessToken) &&
       Boolean(secretRow.channelSecret);
+
     if (hasLine) {
       const updated = await prisma.bot.update({
         where: { id: botId },
@@ -405,6 +407,7 @@ async function handlePutConfig(req: RequestWithBot, res: Response) {
         issues: parsed.error.issues,
       });
     }
+
     const updateData = parsed.data;
 
     const updatedConfig = await prisma.botConfig.upsert({
@@ -436,7 +439,7 @@ async function handlePutConfig(req: RequestWithBot, res: Response) {
   }
 }
 
-// รองรับทั้งสองรูปแบบ path
+// รองรับทั้งสองรูปแบบ path เพื่อกันพัง
 router.get("/:botId/config", findBot, handleGetConfig);
 router.get("/config/:botId", findBot, handleGetConfig);
 

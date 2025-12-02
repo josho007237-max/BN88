@@ -1,2 +1,0 @@
--- Added MessageType variants RICH and INLINE_KEYBOARD for rich payloads
--- No SQL changes required for SQLite enum representation.

@@ -4,7 +4,7 @@ import jwt, { JwtPayload } from "jsonwebtoken";
 
 declare module "express-serve-static-core" {
   interface Request {
-    admin?: { id: string; email: string; roles?: string[] };
+    admin?: { id: string; email: string };
   }
 }
 
@@ -19,16 +19,8 @@ export function authGuard(req: Request, res: Response, next: NextFunction) {
     const decoded = jwt.verify(token, JWT_SECRET) as JwtPayload & {
       id?: string;
       email?: string;
-      roles?: string[];
     };
-    const adminId = decoded.id ?? decoded.sub;
-    req.admin = {
-      id: String(adminId ?? ""),
-      email: String(decoded.email ?? ""),
-      roles: Array.isArray(decoded.roles)
-        ? decoded.roles.map((r) => String(r))
-        : undefined,
-    };
+    req.admin = { id: String(decoded.id ?? ""), email: String(decoded.email ?? "") };
     return next();
   } catch {
     return res.status(401).json({ ok: false, message: "invalid_token" });

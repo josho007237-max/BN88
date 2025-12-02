@@ -1,20 +1,43 @@
 <!doctype html>
-<html>
+<html lang="th">
   <head>
     <meta charset="utf-8" />
     <title>BN9 LIFF Mini Tool</title>
+
+    <!-- แก้เคส meta-viewport -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, shrink-to-fit=no"
+    />
+
     <script src="https://static.line-scdn.net/liff/edge/2/sdk.js"></script>
     <script type="module" src="./liff.ts"></script>
+
     <style>
       body {
         font-family: sans-serif;
         padding: 20px;
       }
+
+      label {
+        display: block;
+        margin-bottom: 4px;
+      }
+
+      input {
+        padding: 6px 8px;
+        margin-bottom: 12px;
+      }
     </style>
   </head>
   <body>
     <h1>Mini Form</h1>
-    <input id="name" placeholder="Your name" />
+
+    <div>
+      <label for="name">ชื่อของคุณ</label>
+      <input id="name" name="name" placeholder="Your name" />
+    </div>
+
     <button id="submit">Submit</button>
     <div id="status"></div>
   </body>

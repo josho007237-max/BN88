@@ -3,101 +3,90 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider = "sqlite"
   url      = env("DATABASE_URL")
 }
 
 model Audience {
-  id            String    @id @default(cuid())
-  lineUserId    String    @unique
-  displayName   String?
-  locale        String?
-  tags          String[]
-  lastActiveAt  DateTime? @db.Timestamptz
-  createdAt     DateTime  @default(now()) @db.Timestamptz
-  updatedAt     DateTime  @updatedAt @db.Timestamptz
+  id          String  @id @default(cuid())
+  lineUserId  String  @unique
+  displayName String?
+  locale      String?
 
-  events        Event[]
-  deliveries    CampaignDelivery[]
+  // เก็บเป็น JSON string แทน String[]
+  // ตอนใช้จริงให้ JSON.parse / JSON.stringify ใน TypeScript
+  tags String? @default("[]")
+
+  lastActiveAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  events     Event[]
+  deliveries CampaignDelivery[]
 }
 
 model Event {
-  id           String    @id @default(cuid())
-  type         String
-  payload      Json
-  occurredAt   DateTime  @default(now()) @db.Timestamptz
+  id   String @id @default(cuid())
+  type String
 
-  audienceId   String?
-  audience     Audience? @relation(fields: [audienceId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  // เก็บ payload เป็น JSON string
+  payload    String?  @default("{}")
+  occurredAt DateTime @default(now())
+
+  audienceId String?
+  audience   Audience? @relation(fields: [audienceId], references: [id], onDelete: SetNull)
 }
 
 model Campaign {
-  id            String    @id @default(cuid())
-  externalId    String?   @unique
-  name          String
-codex/analyze-bn88-project-structure-and-workflow-s9ghbu
-  message       String
-  status        String    @default("draft")
-  totalTargets  Int?
-  sentCount     Int       @default(0)
-  failedCount   Int       @default(0)
+  id          String  @id @default(cuid())
+  name        String
+  description String?
 
- main
-  scheduleStart DateTime? @db.Timestamptz
-  scheduleEnd   DateTime? @db.Timestamptz
-  cron          String?
-  enabled       Boolean   @default(true)
-codex/analyze-bn88-project-structure-and-workflow-s9ghbu
-  segmentType   String?
-  segmentQuery  Json?
-  messagePayload Json?
+  // ถ้ามีฟิลด์อื่นของ Campaign (เช่น type, status ฯลฯ)
+  // สามารถเพิ่มต่อจากนี้ได้ เช่น:
+  // type      String?
+  // status    String?
 
-  segmentType   String
-  segmentQuery  Json
-  message       Json
-main
-  createdAt     DateTime  @default(now()) @db.Timestamptz
-  updatedAt     DateTime  @updatedAt @db.Timestamptz
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  deliveries    CampaignDelivery[]
-codex/analyze-bn88-project-structure-and-workflow-s9ghbu
-  schedules     CampaignSchedule[]
+  deliveries CampaignDelivery[]
+  schedules  CampaignSchedule[]
+}
 
-main
+model CampaignSchedule {
+  id         String   @id @default(cuid())
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  campaignId String
+
+  // cron expression เช่น "0 9 * * *"
+  cronExpression String
+
+  // timezone เช่น "Asia/Bangkok"
+  timezone String
+
+  isActive  Boolean   @default(true)
+  lastRunAt DateTime?
+  nextRunAt DateTime?
+
+  // ใช้กันซ้ำเวลา add job (ผูกกับ jobId ของ queue)
+  idempotencyKey String @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model CampaignDelivery {
-  id           String    @id @default(cuid())
-  campaignId   String
-  audienceId   String
-  status       String
-  sentAt       DateTime? @db.Timestamptz
-  error        String?
+  id         String    @id @default(cuid())
+  campaignId String
+  audienceId String
+  status     String
+  sentAt     DateTime?
+  error      String?
 
-  campaign     Campaign  @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  audience     Audience  @relation(fields: [audienceId], references: [id], onDelete: Cascade)
+  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  audience Audience @relation(fields: [audienceId], references: [id], onDelete: Cascade)
 
   @@index([campaignId])
   @@index([audienceId])
 }
- codex/analyze-bn88-project-structure-and-workflow-s9ghbu
-
-model CampaignSchedule {
-  id             String    @id @default(cuid())
-  campaignId     String
-  cron           String
-  timezone       String
-  startAt        DateTime? @db.Timestamptz
-  endAt          DateTime? @db.Timestamptz
-  enabled        Boolean   @default(true)
-  repeatJobKey   String?   @unique
-  idempotencyKey String?   @unique
-  createdAt      DateTime  @default(now()) @db.Timestamptz
-  updatedAt      DateTime  @updatedAt @db.Timestamptz
-
-  campaign Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-
-  @@index([campaignId])
-}
-
- main

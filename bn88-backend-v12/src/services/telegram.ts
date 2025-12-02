@@ -1,23 +1,10 @@
 // src/services/telegram.ts
 
-export type TelegramSendOptions = {
-  replyToMessageId?: string | number;
-  photoUrl?: string;
-  documentUrl?: string;
-  documentName?: string;
-  inlineKeyboard?: Array<Array<{ text: string; callback_data: string }>>;
-};
-
 export async function sendTelegramMessage(
   botToken: string,
   chatId: number | string,
   text: string,
- codex/analyze-bn88-project-structure-and-workflow-s9ghbu
-  replyToMessageId?: string | number,
-  options?: TelegramSendOptions
-
   replyToMessageId?: string | number
- main
 ): Promise<boolean> {
   const f = (globalThis as any).fetch as typeof fetch | undefined;
   if (!f) {
@@ -25,36 +12,12 @@ export async function sendTelegramMessage(
     return false;
   }
 
-  const hasPhoto = Boolean(options?.photoUrl);
-  const hasDocument = Boolean(options?.documentUrl);
-
-  const url = hasPhoto
-    ? `https://api.telegram.org/bot${botToken}/sendPhoto`
-    : hasDocument
-      ? `https://api.telegram.org/bot${botToken}/sendDocument`
-      : `https://api.telegram.org/bot${botToken}/sendMessage`;
+  const url = `https://api.telegram.org/bot${botToken}/sendMessage`;
 
   const body: any = {
     chat_id: chatId,
+    text,
   };
-
-  if (hasPhoto) {
-    body.photo = options?.photoUrl;
-    if (text) body.caption = text;
-  } else if (hasDocument) {
-    body.document = options?.documentUrl;
-    if (options?.documentName) body.caption = options.documentName;
-    if (text && !options?.documentName) body.caption = text;
-  } else {
-    body.text = text;
-  }
-
-  if (options?.inlineKeyboard?.length) {
-    body.reply_markup = {
-      inline_keyboard: options.inlineKeyboard,
-    };
-  }
-
   if (replyToMessageId) {
     body.reply_to_message_id = replyToMessageId;
   }

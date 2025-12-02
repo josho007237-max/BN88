@@ -72,16 +72,10 @@ router.post(
           .json({ ok: false, message: "invalid_credentials" });
       }
 
-      const roleLinks = await prisma.adminUserRole.findMany({
-        where: { adminId: user.id },
-        include: { role: true },
-      });
-      const roleNames = roleLinks.map((r) => r.role.name);
-
       const payload: AuthPayload = {
         sub: String(user.id),
         email: user.email,
-        roles: roleNames,
+        roles: ["admin"],
       };
 
       const expiresIn = getExpiresIn();
@@ -92,7 +86,7 @@ router.post(
         subject: "admin-api",
       });
 
-      const safeUser = { id: user.id, email: user.email, roles: roleNames };
+      const safeUser = { id: user.id, email: user.email, roles: ["admin"] };
 
       return res.json({ ok: true, token, user: safeUser });
     } catch (err) {
