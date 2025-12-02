@@ -139,6 +139,8 @@ export type ChatSession = {
   status?: string | null;        // เช่น "open" | "pending" | "closed"
   tags?: string[] | null;        // แปลงมาจาก JSON string ใน DB
   adminNote?: string | null;     // โน้ตของแอดมิน
+  caseCount?: number;            // จำนวนเคสที่ผูกกับ session
+  hasIssue?: boolean;            // true ถ้ามีเคสผูกกับห้องนี้
 
   createdAt?: string;
   updatedAt?: string;
@@ -544,14 +546,34 @@ export async function updateBotConfig(
 /**
  * GET /api/admin/chat/sessions?botId=...&limit=...
  */
+export type ChatSessionQuery = {
+  limit?: number;
+  platform?: string;
+  query?: string;
+  isIssue?: boolean | null;
+  from?: string | null;
+  to?: string | null;
+};
+
 export async function getChatSessions(
   botId: string,
-  limit = 50,
-  platform?: string
+  options?: ChatSessionQuery
 ): Promise<ChatSession[]> {
+  const params: Record<string, string | number | boolean | undefined> = {
+    botId,
+    limit: options?.limit ?? 50,
+    platform: options?.platform,
+  };
+
+  if (options?.query) params.q = options.query;
+  if (options?.isIssue !== undefined && options?.isIssue !== null)
+    params.isIssue = options.isIssue;
+  if (options?.from) params.from = options.from;
+  if (options?.to) params.to = options.to;
+
   const res = await API.get<{ ok: boolean; items?: ChatSession[]; sessions?: ChatSession[] }>(
     "/admin/chat/sessions",
-    { params: { botId, limit, platform } }
+    { params }
   );
   const data = res.data as any;
   return data.items ?? data.sessions ?? [];
