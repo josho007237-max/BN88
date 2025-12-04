@@ -54,29 +54,57 @@ export default function MarketingLep() {
       </p>
 
       <div className="bg-gray-900/60 border border-gray-700 rounded-xl p-5 max-w-xl">
-        <div className="flex items-center justify-between mb-4">
+        <div className="flex items-start justify-between gap-4 mb-4">
           <div>
-            <div className="text-sm font-medium text-gray-300">
-              LEP Health Check
-            </div>
+            <div className="text-sm font-medium text-gray-300">LEP Health Check</div>
             <div className="text-xs text-gray-500">
               Base URL: <code>http://localhost:8080</code> (ตั้งค่าใน <code>.env</code> backend)
             </div>
           </div>
 
-        <button
-          onClick={handleCheckHealth}
-          disabled={loading}
-          className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 disabled:opacity-60 text-sm font-medium"
-        >
-          {loading ? "Checking..." : "Check LEP Health"}
-        </button>
+          <button
+            onClick={handleCheckHealth}
+            disabled={loading}
+            className="px-4 py-2 rounded-lg bg-emerald-500 hover:bg-emerald-600 disabled:opacity-60 text-sm font-medium"
+          >
+            {loading ? "Checking..." : "Check LEP Health"}
+          </button>
+        </div>
+
+        {result && (
+          <div className="grid grid-cols-1 gap-3 text-sm text-gray-200">
+            <div className="flex items-center gap-2">
+              <span className="text-gray-400">Status:</span>
+              <span
+                className={`px-2 py-0.5 rounded-md text-xs font-semibold ${
+                  result.ok
+                    ? "bg-emerald-500/15 text-emerald-200"
+                    : "bg-amber-500/15 text-amber-100"
+                }`}
+              >
+                {result.ok ? "Healthy" : `HTTP ${result.status}`}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-gray-400">Target:</span>
+              <code className="text-xs bg-black/40 px-2 py-1 rounded border border-gray-800">
+                {result.target}
+              </code>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="text-gray-400">LEP Base URL:</span>
+              <code className="text-xs bg-black/40 px-2 py-1 rounded border border-gray-800">
+                {result.lepBaseUrl}
+              </code>
+            </div>
+          </div>
+        )}
       </div>
 
       {checkedAt && (
-        <div className="text-xs text-gray-500 mb-3">
-          Last checked: {checkedAt}
-        </div>
+        <div className="text-xs text-gray-500 mb-3">Last checked: {checkedAt}</div>
       )}
 
       {error && (
@@ -87,7 +115,7 @@ export default function MarketingLep() {
 
       {result && (
         <pre className="bg-black/60 border border-gray-800 rounded-md text-xs text-gray-100 p-3 overflow-x-auto">
-{JSON.stringify(result, null, 2)}
+          {JSON.stringify(result, null, 2)}
         </pre>
       )}
 
@@ -97,6 +125,5 @@ export default function MarketingLep() {
         </div>
       )}
     </div>
-  </div>
   );
 }
