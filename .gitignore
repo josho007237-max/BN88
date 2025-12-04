@@ -8,3 +8,9 @@ line-engagement-platform/docker-compose.override.yml.bak
 node_modules
 dist
 .env
+# Dev SQLite DB (ไม่ให้เข้า git)
+bn88-backend-v12/prisma/prisma/dev.db
+bn88-backend-v12/prisma/prisma/dev.db-journal
+
+# ไม่จำเป็นแต่แนะนำ: ไม่ต้อง commit cloudflared.exe
+cloudflared.exe
